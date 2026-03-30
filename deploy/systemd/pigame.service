@@ -1,0 +1,16 @@
+[Unit]
+Description=PiGame idle RPG device daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pigame
+Environment=PYTHONPATH=/home/pi/pigame/src
+ExecStart=/usr/bin/python3 -m pigame.runtime --renderer auto --battery-backend cw2015 --battery-bus 1 --battery-address 0x62 --low-battery-percent 15 --critical-battery-percent 5 --shutdown-command "sudo systemctl poweroff" --tick-seconds 180 --save /home/pi/pigame/data/save.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
