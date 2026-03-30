@@ -13,6 +13,7 @@ from .models import SaveState
 class RenderFrame:
     title: str
     lines: list[str]
+    page: str = "status"
 
 
 class Renderer(Protocol):
@@ -27,6 +28,13 @@ class TextRenderer:
     """Base text renderer used by both desktop and hardware adapters."""
 
     def build_frame(self, state: SaveState, engine: GameEngine) -> RenderFrame:
+        pages = self.build_pages(state, engine)
+        if not pages:
+            return RenderFrame(title="PiGame", lines=["No renderable pages."], page="empty")
+        index = state.character.lifetime_ticks % len(pages)
+        return pages[index]
+
+    def build_pages(self, state: SaveState, engine: GameEngine) -> list[RenderFrame]:
         c = state.character
         equipped = len([item for item in state.inventory if item.equipped])
         battery = state.device.battery_percent
@@ -39,20 +47,38 @@ class TextRenderer:
             else "n/a"
         )
         battery_text = f"{battery}%" if battery is not None else "--%"
-        return RenderFrame(
-            title=f"{c.name} | lvl {c.level} | {c.specialization}",
-            lines=[
-                f"{c.title}  XP {c.experience}  Gold {c.gold}",
-                f"Stats P{c.stats.power} V{c.stats.vitality} A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
-                f"Act {c.current_activity}  Supplies {c.supplies}  Gear {equipped}",
-                f"Depth {c.dungeon_depth}  Wins {c.wins}  Losses {c.losses}  Mood {c.mood}",
-                f"{state.world.current_region}  danger {state.world.danger_rating}  tier {state.world.biome_tier}",
-                f"Battery {battery_text} {charge_flag}  Volt {voltage:.2f}V" if voltage is not None else f"Battery {battery_text} {charge_flag}  Volt --.--V",
-                f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
-                f"Event: {state.world.last_event}",
-                f"AI: {engine.ai_brief(state)}",
-            ],
+        battery_line = (
+            f"Battery {battery_text} {charge_flag}  Volt {voltage:.2f}V"
+            if voltage is not None
+            else f"Battery {battery_text} {charge_flag}  Volt --.--V"
         )
+        return [
+            RenderFrame(
+                title=f"{c.name} | Status | lvl {c.level}",
+                page="status",
+                lines=[
+                    f"{c.title}  Spec {c.specialization}",
+                    f"Stats P{c.stats.power} V{c.stats.vitality} A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
+                    f"Act {c.current_activity}  Supplies {c.supplies}  Gear {equipped}",
+                    f"Depth {c.dungeon_depth}  Wins {c.wins}  Losses {c.losses}  Mood {c.mood}",
+                    f"{state.world.current_region}  danger {state.world.danger_rating}  tier {state.world.biome_tier}",
+                    f"XP {c.experience}  Gold {c.gold}",
+                    battery_line,
+                    f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
+                    f"AI: {engine.ai_brief(state)}",
+                ],
+            ),
+            RenderFrame(
+                title=f"{c.name} | Gear | lvl {c.level}",
+                page="gear",
+                lines=self._build_gear_lines(state),
+            ),
+            RenderFrame(
+                title=f"{c.name} | Log | lvl {c.level}",
+                page="log",
+                lines=self._build_log_lines(state),
+            ),
+        ]
 
     def render_to_text(self, frame: RenderFrame) -> str:
         border = "=" * max(40, len(frame.title))
@@ -60,6 +86,37 @@ class TextRenderer:
 
     def render(self, frame: RenderFrame) -> str:
         return self.render_to_text(frame)
+
+    def _build_gear_lines(self, state: SaveState) -> list[str]:
+        slots = {
+            "main_hand": "Main",
+            "body": "Body",
+            "charm": "Charm",
+        }
+        lines = [
+            f"Power from gear {sum(item.power for item in state.inventory if item.equipped)}",
+            f"Inventory {len(state.inventory)} items",
+        ]
+        for slot_key, label in slots.items():
+            item = next(
+                (entry for entry in state.inventory if entry.equipped and entry.slot == slot_key),
+                None,
+            )
+            if item is None:
+                lines.append(f"{label}: empty")
+                continue
+            affix = f" [{' / '.join(item.affixes)}]" if item.affixes else ""
+            lines.append(f"{label}: {item.name} +{item.power}{affix}")
+        consumables = sum(item.quantity for item in state.inventory if item.item_type == "consumable")
+        materials = sum(item.quantity for item in state.inventory if item.item_type == "material")
+        lines.append(f"Consumables {consumables}  Materials {materials}")
+        return lines
+
+    def _build_log_lines(self, state: SaveState) -> list[str]:
+        recent = list(reversed(state.activity_log[-6:]))
+        if not recent:
+            recent = ["No notable events yet."]
+        return [f"Last event: {state.world.last_event}", *recent]
 
 
 class ConsoleRenderer(TextRenderer):
