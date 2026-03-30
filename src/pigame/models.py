@@ -143,7 +143,11 @@ class SaveState:
         inventory = []
         for item in data.get("inventory", []):
             item_data = dict(item)
-            item_data["stat_bonuses"] = Stats(**item_data.get("stat_bonuses", {}))
+            stat_bonus_data = item_data.get("stat_bonuses")
+            if stat_bonus_data:
+                item_data["stat_bonuses"] = Stats(**stat_bonus_data)
+            else:
+                item_data["stat_bonuses"] = zero_stats()
             inventory.append(Item(**item_data))
         world = WorldState(**data.get("world", {}))
         device = DeviceState(**data.get("device", {}))
