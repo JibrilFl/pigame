@@ -28,6 +28,7 @@ class TextRenderer:
 
     def build_frame(self, state: SaveState, engine: GameEngine) -> RenderFrame:
         c = state.character
+        equipped = len([item for item in state.inventory if item.equipped])
         battery = state.device.battery_percent
         voltage = state.device.battery_voltage
         charge_flag = (
@@ -41,10 +42,11 @@ class TextRenderer:
         return RenderFrame(
             title=f"{c.name} | lvl {c.level} | {c.specialization}",
             lines=[
-                f"XP {c.experience}  Gold {c.gold}  Supplies {c.supplies}",
+                f"{c.title}  XP {c.experience}  Gold {c.gold}",
                 f"Stats P{c.stats.power} V{c.stats.vitality} A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
+                f"Act {c.current_activity}  Supplies {c.supplies}  Gear {equipped}",
                 f"Depth {c.dungeon_depth}  Wins {c.wins}  Losses {c.losses}  Mood {c.mood}",
-                f"World danger {state.world.danger_rating}  biome tier {state.world.biome_tier}",
+                f"{state.world.current_region}  danger {state.world.danger_rating}  tier {state.world.biome_tier}",
                 f"Battery {battery_text} {charge_flag}  Volt {voltage:.2f}V" if voltage is not None else f"Battery {battery_text} {charge_flag}  Volt --.--V",
                 f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
                 f"Event: {state.world.last_event}",

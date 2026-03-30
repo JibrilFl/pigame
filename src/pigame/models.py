@@ -21,6 +21,21 @@ class ItemType(str, Enum):
     MATERIAL = "material"
 
 
+class EquipmentSlot(str, Enum):
+    MAIN_HAND = "main_hand"
+    BODY = "body"
+    CHARM = "charm"
+
+
+class ActivityType(str, Enum):
+    DUNGEON = "dungeon"
+    REST = "rest"
+    CAMP = "camp"
+    HUNT = "hunt"
+    RITUAL = "ritual"
+    SALVAGE = "salvage"
+
+
 @dataclass
 class Stats:
     power: int = 5
@@ -28,6 +43,10 @@ class Stats:
     agility: int = 5
     insight: int = 5
     luck: int = 5
+
+
+def zero_stats() -> Stats:
+    return Stats(power=0, vitality=0, agility=0, insight=0, luck=0)
 
 
 @dataclass
@@ -38,6 +57,10 @@ class Item:
     power: int = 0
     level: int = 1
     quantity: int = 1
+    slot: str | None = None
+    equipped: bool = False
+    affixes: list[str] = field(default_factory=list)
+    stat_bonuses: Stats = field(default_factory=zero_stats)
 
 
 @dataclass
@@ -54,6 +77,8 @@ class Character:
     wins: int = 0
     losses: int = 0
     mood: int = 50
+    current_activity: str = ActivityType.DUNGEON.value
+    title: str = "Hatchling Delver"
 
 
 @dataclass
@@ -62,6 +87,8 @@ class WorldState:
     danger_rating: int = 1
     ambient_story: str = "A quiet beginning."
     last_event: str = "The creature wakes."
+    current_region: str = "Moss Tunnels"
+    current_threat: str = "Wandering vermin"
 
 
 @dataclass
@@ -113,7 +140,11 @@ class SaveState:
             mood=character_data.get("mood", 50),
         )
 
-        inventory = [Item(**item) for item in data.get("inventory", [])]
+        inventory = []
+        for item in data.get("inventory", []):
+            item_data = dict(item)
+            item_data["stat_bonuses"] = Stats(**item_data.get("stat_bonuses", {}))
+            inventory.append(Item(**item_data))
         world = WorldState(**data.get("world", {}))
         device = DeviceState(**data.get("device", {}))
         party = PartyState(**data.get("party", {}))
