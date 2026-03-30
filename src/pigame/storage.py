@@ -55,6 +55,9 @@ def migrate_save(state: SaveState) -> bool:
     if not state.character.title:
         state.character.title = infer_title(state.character.level)
         changed = True
+    if state.character.unspent_stat_points < 0:
+        state.character.unspent_stat_points = 0
+        changed = True
     if not state.world.current_region:
         state.world.current_region = infer_region(state.character.dungeon_depth)
         changed = True

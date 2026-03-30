@@ -79,6 +79,7 @@ class Character:
     mood: int = 50
     current_activity: str = ActivityType.DUNGEON.value
     title: str = "Hatchling Delver"
+    unspent_stat_points: int = 0
 
 
 @dataclass
@@ -138,6 +139,9 @@ class SaveState:
             wins=character_data.get("wins", 0),
             losses=character_data.get("losses", 0),
             mood=character_data.get("mood", 50),
+            current_activity=character_data.get("current_activity", ActivityType.DUNGEON.value),
+            title=character_data.get("title", "Hatchling Delver"),
+            unspent_stat_points=character_data.get("unspent_stat_points", 0),
         )
 
         inventory = []

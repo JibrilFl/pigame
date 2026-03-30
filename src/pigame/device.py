@@ -62,7 +62,7 @@ class TextRenderer:
                     f"Act {c.current_activity}  Supplies {c.supplies}  Gear {equipped}",
                     f"Depth {c.dungeon_depth}  Wins {c.wins}  Losses {c.losses}  Mood {c.mood}",
                     f"{state.world.current_region}  danger {state.world.danger_rating}  tier {state.world.biome_tier}",
-                    f"XP {c.experience}  Gold {c.gold}",
+                    f"XP {c.experience}  Gold {c.gold}  Pts {c.unspent_stat_points}",
                     battery_line,
                     f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
                     f"AI: {engine.ai_brief(state)}",

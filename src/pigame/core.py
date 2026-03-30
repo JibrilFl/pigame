@@ -94,6 +94,12 @@ class GameEngine:
         self._trim_logs(state)
         return TickResult(summary=summary, leveled_up=leveled_up, loot=loot)
 
+    def total_stats(self, state: SaveState) -> Stats:
+        return self._total_stats(state)
+
+    def hero_power(self, state: SaveState) -> int:
+        return self._hero_power(state)
+
     def _choose_activity(self, state: SaveState) -> str:
         character = state.character
         roll = self.rng.random()
@@ -438,6 +444,7 @@ class GameEngine:
             if character.level % 5 == 0:
                 character.stats.luck += 1
             character.supplies += 1
+            character.unspent_stat_points += 1
             character.title = self._title_for_level(character.level)
             leveled_up = True
             threshold = 20 + character.level * 15

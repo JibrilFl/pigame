@@ -10,8 +10,8 @@ from urllib.parse import parse_qs, urlparse
 
 from .core import GameEngine
 from .device import TextRenderer
-from .models import Item, SaveState, zero_stats
-from .storage import DEFAULT_SAVE_PATH, load_save, save_state
+from .models import EquipmentSlot, Item, SaveState, Specialization, zero_stats
+from .storage import DEFAULT_SAVE_PATH, auto_equip_inventory, load_save, save_state
 
 
 HTML = """<!doctype html>
@@ -40,6 +40,7 @@ HTML = """<!doctype html>
     .metric strong {{ display: block; font-size: 18px; margin-bottom: 4px; }}
     .forms {{ display: grid; gap: 12px; }}
     form {{ display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); background: #fffef8; }}
+    .inline-form {{ display: inline-grid; grid-auto-flow: column; gap: 6px; align-items: center; padding: 0; border: 0; background: transparent; }}
     input, button, select {{ width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); background: white; }}
     button {{ background: var(--accent); color: white; border-color: var(--accent); cursor: pointer; }}
     button:hover {{ filter: brightness(0.94); }}
@@ -63,9 +64,12 @@ HTML = """<!doctype html>
             <div class="metric"><strong>Level {level}</strong>XP {xp}</div>
             <div class="metric"><strong>Gold {gold}</strong>Supplies {supplies}</div>
             <div class="metric"><strong>Depth {depth}</strong>Mood {mood}</div>
+            <div class="metric"><strong>Free Points {free_points}</strong>Manual stat allocation</div>
             <div class="metric"><strong>Power {power}</strong>Vitality {vitality}</div>
             <div class="metric"><strong>Agility {agility}</strong>Insight {insight}</div>
             <div class="metric"><strong>Luck {luck}</strong>Wins {wins} / Losses {losses}</div>
+            <div class="metric"><strong>Total P{total_power} V{total_vitality}</strong>Total A{total_agility} I{total_insight} L{total_luck}</div>
+            <div class="metric"><strong>Hero Power {hero_power}</strong>Computed combat score base</div>
           </div>
         </div>
 
@@ -136,6 +140,32 @@ HTML = """<!doctype html>
               <h3>Add XP</h3>
               <input name="amount" value="50" />
               <button type="submit">Add XP</button>
+            </form>
+
+            <form method="post" action="/specialization">
+              <h3>Set Specialization</h3>
+              <select name="specialization">
+                {specialization_options}
+              </select>
+              <button type="submit">Apply Specialization</button>
+            </form>
+
+            <form method="post" action="/stat">
+              <h3>Spend Stat Point</h3>
+              <select name="stat">
+                <option value="power">power</option>
+                <option value="vitality">vitality</option>
+                <option value="agility">agility</option>
+                <option value="insight">insight</option>
+                <option value="luck">luck</option>
+              </select>
+              <button type="submit">Spend 1 Point</button>
+            </form>
+
+            <form method="post" action="/tick">
+              <h3>Advance Time</h3>
+              <input name="ticks" value="3" />
+              <button type="submit">Run Ticks</button>
             </form>
           </div>
         </div>
@@ -216,6 +246,60 @@ class ManagerHandler(BaseHTTPRequestHandler):
             self._redirect_home()
             return
 
+        if parsed.path == "/specialization":
+            chosen = form.get("specialization", [state.character.specialization])[0]
+            valid = {spec.value for spec in Specialization}
+            if chosen in valid:
+                state.character.specialization = chosen
+                state.activity_log.append(f"Manager set specialization to {chosen}.")
+                save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
+        if parsed.path == "/stat":
+            stat_name = form.get("stat", ["power"])[0]
+            if state.character.unspent_stat_points > 0 and hasattr(state.character.stats, stat_name):
+                setattr(
+                    state.character.stats,
+                    stat_name,
+                    getattr(state.character.stats, stat_name) + 1,
+                )
+                state.character.unspent_stat_points -= 1
+                state.activity_log.append(f"Manager spent 1 stat point on {stat_name}.")
+                save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
+        if parsed.path == "/equip":
+            index = int(form.get("index", ["-1"])[0])
+            if 0 <= index < len(state.inventory):
+                item = state.inventory[index]
+                if item.slot is not None:
+                    for other in state.inventory:
+                        if other.slot == item.slot:
+                            other.equipped = False
+                    item.equipped = True
+                    state.activity_log.append(f"Manager equipped {item.name}.")
+                    save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
+        if parsed.path == "/autoequip":
+            if auto_equip_inventory(state):
+                state.activity_log.append("Manager triggered auto-equip.")
+                save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
+        if parsed.path == "/tick":
+            ticks = max(1, min(50, int(form.get("ticks", ["1"])[0])))
+            for _ in range(ticks):
+                self.engine.tick(state)
+            state.activity_log.append(f"Manager advanced {ticks} ticks.")
+            save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
@@ -224,6 +308,8 @@ class ManagerHandler(BaseHTTPRequestHandler):
     def _build_home(self, state: SaveState) -> str:
         frame = self.renderer.build_frame(state, self.engine)
         c = state.character
+        total_stats = self.engine.total_stats(state)
+        hero_power = self.engine.hero_power(state)
         battery = (
             f"{state.device.battery_percent}% / {state.device.battery_voltage:.2f}V"
             if state.device.battery_percent is not None and state.device.battery_voltage is not None
@@ -240,11 +326,18 @@ class ManagerHandler(BaseHTTPRequestHandler):
             supplies=c.supplies,
             depth=c.dungeon_depth,
             mood=c.mood,
+            free_points=c.unspent_stat_points,
             power=c.stats.power,
             vitality=c.stats.vitality,
             agility=c.stats.agility,
             insight=c.stats.insight,
             luck=c.stats.luck,
+            total_power=total_stats.power,
+            total_vitality=total_stats.vitality,
+            total_agility=total_stats.agility,
+            total_insight=total_stats.insight,
+            total_luck=total_stats.luck,
+            hero_power=hero_power,
             wins=c.wins,
             losses=c.losses,
             region=html.escape(state.world.current_region),
@@ -254,20 +347,52 @@ class ManagerHandler(BaseHTTPRequestHandler):
             battery=html.escape(battery),
             last_event=html.escape(state.world.last_event),
             screen=html.escape(self.renderer.render_to_text(frame)),
-            equipped_table=self._render_items_table([item for item in state.inventory if item.equipped], empty_text="No equipment equipped."),
-            inventory_table=self._render_items_table(state.inventory, empty_text="Inventory is empty."),
+            equipped_table=self._render_items_table(
+                state.inventory,
+                empty_text="No equipment equipped.",
+                only_equipped=True,
+                allow_actions=False,
+            ),
+            inventory_table=self._render_items_table(
+                state.inventory,
+                empty_text="Inventory is empty.",
+                only_equipped=False,
+                allow_actions=True,
+            ),
             log_html=self._render_log(state.activity_log),
+            specialization_options=self._render_specialization_options(c.specialization),
             state=html.escape(json.dumps(state.to_dict(), ensure_ascii=False, indent=2)),
         )
 
-    def _render_items_table(self, items: list[Item], empty_text: str) -> str:
-        if not items:
+    def _render_items_table(
+        self,
+        items: list[Item],
+        empty_text: str,
+        only_equipped: bool,
+        allow_actions: bool,
+    ) -> str:
+        visible_items = [
+            (index, item) for index, item in enumerate(items) if (item.equipped if only_equipped else True)
+        ]
+        if not visible_items:
             return f"<p>{html.escape(empty_text)}</p>"
         rows = []
-        for item in items:
+        for index, item in visible_items:
             affixes = ", ".join(item.affixes) if item.affixes else "-"
+            action = "-"
+            if allow_actions and item.slot in {
+                EquipmentSlot.MAIN_HAND.value,
+                EquipmentSlot.BODY.value,
+                EquipmentSlot.CHARM.value,
+            }:
+                action = (
+                    f"<form method='post' action='/equip' class='inline-form'>"
+                    f"<input type='hidden' name='index' value='{index}' />"
+                    f"<button type='submit'>Equip</button></form>"
+                )
             rows.append(
                 "<tr>"
+                f"<td>{index}</td>"
                 f"<td>{html.escape(item.name)}</td>"
                 f"<td>{html.escape(item.item_type)}</td>"
                 f"<td>{html.escape(item.rarity)}</td>"
@@ -275,11 +400,14 @@ class ManagerHandler(BaseHTTPRequestHandler):
                 f"<td>{html.escape(item.slot or '-')}</td>"
                 f"<td>{'yes' if item.equipped else 'no'}</td>"
                 f"<td>{html.escape(affixes)}</td>"
+                f"<td>{action}</td>"
                 "</tr>"
             )
         return (
+            (("<form method='post' action='/autoequip'><button type='submit'>Auto Equip Best Items</button></form>") if allow_actions else "")
+            +
             "<table><thead><tr>"
-            "<th>Name</th><th>Type</th><th>Rarity</th><th>Power</th><th>Slot</th><th>Eq</th><th>Affixes</th>"
+            "<th>#</th><th>Name</th><th>Type</th><th>Rarity</th><th>Power</th><th>Slot</th><th>Eq</th><th>Affixes</th><th>Action</th>"
             "</tr></thead><tbody>"
             + "".join(rows)
             + "</tbody></table>"
@@ -291,6 +419,15 @@ class ManagerHandler(BaseHTTPRequestHandler):
             return "<p>No recent activity.</p>"
         entries = "".join(f"<li>{html.escape(line)}</li>" for line in recent)
         return f"<ol>{entries}</ol>"
+
+    def _render_specialization_options(self, current_specialization: str) -> str:
+        options = []
+        for specialization in Specialization:
+            selected = " selected" if specialization.value == current_specialization else ""
+            options.append(
+                f"<option value='{html.escape(specialization.value)}'{selected}>{html.escape(specialization.value)}</option>"
+            )
+        return "".join(options)
 
     def _send_html(self, body: str) -> None:
         encoded = body.encode("utf-8")

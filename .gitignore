@@ -42,3 +42,6 @@ data/*.txt
 # Environment files
 .env
 .env.*
+
+# Local project memory
+.local/
