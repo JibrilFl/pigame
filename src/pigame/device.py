@@ -14,6 +14,7 @@ class RenderFrame:
     title: str
     lines: list[str]
     page: str = "status"
+    header_right: str = ""
 
 
 class Renderer(Protocol):
@@ -47,6 +48,13 @@ class TextRenderer:
             else "n/a"
         )
         battery_text = f"{battery}%" if battery is not None else "--%"
+        battery_badge = (
+            f"{battery_text}+"
+            if state.device.charging is True
+            else f"{battery_text}!"
+            if state.device.low_power_mode
+            else battery_text
+        )
         battery_line = (
             f"Battery {battery_text} {charge_flag}  Volt {voltage:.2f}V"
             if voltage is not None
@@ -54,42 +62,45 @@ class TextRenderer:
         )
         return [
             RenderFrame(
-                title=f"{c.name} | Status | lvl {c.level}",
+                title=f"{c.name}  Lv{c.level}",
                 page="status",
+                header_right=battery_badge,
                 lines=[
-                    f"{c.title}  Spec {c.specialization}",
-                    f"Stats P{c.stats.power} V{c.stats.vitality} A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
-                    f"Act {c.current_activity}  Supplies {c.supplies}  Gear {equipped}",
-                    f"Depth {c.dungeon_depth}  Wins {c.wins}  Losses {c.losses}  Mood {c.mood}",
-                    f"{state.world.current_region}  danger {state.world.danger_rating}  tier {state.world.biome_tier}",
+                    f"{c.title} / {c.specialization}",
+                    f"P{c.stats.power} V{c.stats.vitality}  A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
+                    f"Act {c.current_activity}  Sup {c.supplies}  Gear {equipped}",
+                    f"Depth {c.dungeon_depth}  W {c.wins}  L {c.losses}  Mood {c.mood}",
+                    f"Gold {c.gold}  StatPts {c.unspent_stat_points}  PerkPts {c.perk_points}",
+                    f"{state.world.current_region} / danger {state.world.danger_rating} / tier {state.world.biome_tier}",
                     (
-                        f"Boss {state.world.boss_name} lvl {state.world.boss_level}"
+                        f"Boss {state.world.boss_name} lv{state.world.boss_level}"
                         if state.world.boss_active
                         else f"Boss in {state.world.boss_countdown} clears"
                     ),
-                    f"XP {c.experience}  Gold {c.gold}  Pts {c.unspent_stat_points}",
-                    f"PerkPts {c.perk_points}  Perks {len(c.perks)}",
-                    f"LossStreak {c.loss_streak}  Wait {c.awaiting_player}",
+                    f"Loss {c.loss_streak}  Wait {c.awaiting_player}  Perks {len(c.perks)}",
                     battery_line,
                     f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
                     f"AI: {engine.ai_brief(state)}",
                 ],
             ),
             RenderFrame(
-                title=f"{c.name} | Gear | lvl {c.level}",
+                title=f"{c.name}  Loadout",
                 page="gear",
+                header_right=battery_badge,
                 lines=self._build_gear_lines(state, engine),
             ),
             RenderFrame(
-                title=f"{c.name} | Log | lvl {c.level}",
+                title=f"{c.name}  Chronicle",
                 page="log",
+                header_right=battery_badge,
                 lines=self._build_log_lines(state),
             ),
         ]
 
     def render_to_text(self, frame: RenderFrame) -> str:
         border = "=" * max(40, len(frame.title))
-        return "\n".join([border, frame.title, border, *frame.lines])
+        header = f"{frame.title} {frame.header_right}".strip()
+        return "\n".join([border, header, border, *frame.lines])
 
     def render(self, frame: RenderFrame) -> str:
         return self.render_to_text(frame)
@@ -188,21 +199,7 @@ class WaveshareRenderer(TextRenderer):
         image = Image.new("1", (canvas_width, canvas_height), 255)
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
-
-        y = 4
-        draw.text((4, y), frame.title[:28], font=font, fill=0)
-        y += 14
-        draw.line((2, y, canvas_width - 2, y), fill=0, width=1)
-        y += 4
-
-        for raw_line in frame.lines:
-            for line in self._wrap_text(raw_line, max_chars=max(12, canvas_width // 7)):
-                if y > canvas_height - 12:
-                    break
-                draw.text((4, y), line, font=font, fill=0)
-                y += 12
-            if y > canvas_height - 12:
-                break
+        self._draw_frame_ui(draw, font, frame, canvas_width, canvas_height)
 
         try:
             self._driver.init()
@@ -254,6 +251,142 @@ class WaveshareRenderer(TextRenderer):
         if current:
             lines.append(current)
         return lines
+
+    def _draw_frame_ui(self, draw, font, frame: RenderFrame, width: int, height: int) -> None:
+        self._draw_header(draw, font, frame, width)
+        if frame.page == "status":
+            self._draw_status_page(draw, font, frame, width, height)
+            return
+        if frame.page == "gear":
+            self._draw_list_page(draw, font, frame, width, height, icon_set=["blade", "armor", "charm", "bag", "chip", "star"])
+            return
+        self._draw_list_page(draw, font, frame, width, height, icon_set=["log", "log", "log", "log", "log", "log"])
+
+    def _draw_header(self, draw, font, frame: RenderFrame, width: int) -> None:
+        draw.rectangle((0, 0, width - 1, 19), outline=0, fill=255)
+        draw.rectangle((0, 0, width - 1, 15), outline=0, fill=255)
+        draw.text((6, 3), frame.title[:20], font=font, fill=0)
+        badge = frame.header_right[:6]
+        badge_width = 34
+        draw.rounded_rectangle((width - badge_width - 5, 2, width - 5, 14), radius=3, outline=0, fill=255)
+        self._draw_icon(draw, "battery", width - badge_width - 2, 5)
+        draw.text((width - badge_width + 10, 4), badge, font=font, fill=0)
+        pill_text = frame.page.upper()[:6]
+        pill_width = 8 + len(pill_text) * 6
+        draw.rounded_rectangle((5, 17, 5 + pill_width, 28), radius=3, outline=0, fill=255)
+        draw.text((9, 19), pill_text, font=font, fill=0)
+        draw.line((0, 31, width - 1, 31), fill=0, width=1)
+
+    def _draw_status_page(self, draw, font, frame: RenderFrame, width: int, height: int) -> None:
+        cards = frame.lines[:8]
+        body_top = 34
+        card_w = (width - 18) // 2
+        card_h = 18
+        icons = ["star", "stats", "act", "skull", "coin", "map", "crown", "alert"]
+        for index, line in enumerate(cards):
+            col = index % 2
+            row = index // 2
+            x0 = 5 + col * (card_w + 8)
+            y0 = body_top + row * (card_h + 4)
+            if y0 + card_h > height - 22:
+                break
+            self._draw_card(draw, font, x0, y0, card_w, card_h, line, icons[index % len(icons)])
+        footer = frame.lines[8:10]
+        if footer:
+            y0 = height - 20
+            draw.rectangle((5, y0, width - 6, height - 5), outline=0, fill=255)
+            summary = " / ".join(footer)
+            wrapped = self._wrap_text(summary, max_chars=38)
+            if wrapped:
+                draw.text((8, y0 + 3), wrapped[0], font=font, fill=0)
+
+    def _draw_list_page(self, draw, font, frame: RenderFrame, width: int, height: int, icon_set: list[str]) -> None:
+        y = 35
+        row_h = 13
+        for index, raw_line in enumerate(frame.lines):
+            wrapped = self._wrap_text(raw_line, max_chars=34)
+            if not wrapped:
+                continue
+            box_h = 11 + 10 * min(2, len(wrapped))
+            if y + box_h > height - 4:
+                break
+            draw.rectangle((5, y, width - 6, y + box_h), outline=0, fill=255)
+            self._draw_icon(draw, icon_set[index % len(icon_set)], 9, y + 3)
+            text_y = y + 2
+            for line in wrapped[:2]:
+                draw.text((22, text_y), line, font=font, fill=0)
+                text_y += 9
+            y += box_h + 3
+
+    def _draw_card(self, draw, font, x: int, y: int, w: int, h: int, text: str, icon_name: str) -> None:
+        draw.rectangle((x, y, x + w, y + h), outline=0, fill=255)
+        self._draw_icon(draw, icon_name, x + 4, y + 5)
+        wrapped = self._wrap_text(text, max_chars=15)
+        if wrapped:
+            draw.text((x + 18, y + 3), wrapped[0], font=font, fill=0)
+        if len(wrapped) > 1:
+            draw.text((x + 18, y + 10), wrapped[1], font=font, fill=0)
+
+    def _draw_icon(self, draw, icon_name: str, x: int, y: int) -> None:
+        if icon_name == "battery":
+            draw.rectangle((x, y, x + 9, y + 6), outline=0, fill=255)
+            draw.rectangle((x + 10, y + 2, x + 11, y + 4), outline=0, fill=255)
+            return
+        if icon_name == "star":
+            draw.polygon([(x + 4, y), (x + 5, y + 3), (x + 8, y + 3), (x + 6, y + 5), (x + 7, y + 8), (x + 4, y + 6), (x + 1, y + 8), (x + 2, y + 5), (x, y + 3), (x + 3, y + 3)], outline=0)
+            return
+        if icon_name == "stats":
+            draw.rectangle((x, y + 4, x + 1, y + 8), outline=0, fill=0)
+            draw.rectangle((x + 3, y + 2, x + 4, y + 8), outline=0, fill=0)
+            draw.rectangle((x + 6, y, x + 7, y + 8), outline=0, fill=0)
+            return
+        if icon_name == "act":
+            draw.polygon([(x, y + 4), (x + 4, y), (x + 8, y + 4), (x + 4, y + 8)], outline=0)
+            return
+        if icon_name == "skull":
+            draw.ellipse((x, y, x + 8, y + 6), outline=0)
+            draw.rectangle((x + 2, y + 6, x + 6, y + 8), outline=0)
+            return
+        if icon_name == "coin":
+            draw.ellipse((x, y, x + 8, y + 8), outline=0)
+            draw.line((x + 2, y + 4, x + 6, y + 4), fill=0, width=1)
+            return
+        if icon_name == "map":
+            draw.rectangle((x, y, x + 8, y + 8), outline=0)
+            draw.line((x + 3, y, x + 3, y + 8), fill=0, width=1)
+            draw.line((x + 6, y, x + 6, y + 8), fill=0, width=1)
+            return
+        if icon_name == "crown":
+            draw.polygon([(x, y + 8), (x + 1, y + 2), (x + 4, y + 5), (x + 7, y + 1), (x + 8, y + 8)], outline=0)
+            return
+        if icon_name == "alert":
+            draw.polygon([(x + 4, y), (x + 8, y + 8), (x, y + 8)], outline=0)
+            draw.line((x + 4, y + 3, x + 4, y + 5), fill=0, width=1)
+            return
+        if icon_name == "blade":
+            draw.line((x + 1, y + 7, x + 7, y + 1), fill=0, width=1)
+            draw.line((x, y + 8, x + 2, y + 6), fill=0, width=1)
+            return
+        if icon_name == "armor":
+            draw.polygon([(x + 1, y + 1), (x + 7, y + 1), (x + 8, y + 3), (x + 6, y + 8), (x + 2, y + 8), (x, y + 3)], outline=0)
+            return
+        if icon_name == "charm":
+            draw.ellipse((x + 1, y + 1, x + 7, y + 7), outline=0)
+            draw.line((x + 4, y, x + 4, y + 2), fill=0, width=1)
+            return
+        if icon_name == "bag":
+            draw.rectangle((x + 1, y + 3, x + 7, y + 8), outline=0)
+            draw.arc((x + 2, y, x + 6, y + 4), start=180, end=360, fill=0)
+            return
+        if icon_name == "chip":
+            draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=0)
+            return
+        if icon_name == "log":
+            draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=0)
+            draw.line((x + 2, y + 3, x + 6, y + 3), fill=0, width=1)
+            draw.line((x + 2, y + 5, x + 6, y + 5), fill=0, width=1)
+            return
+        draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=0)
 
 
 def build_renderer(mode: str = "auto") -> Renderer:
