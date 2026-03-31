@@ -15,6 +15,9 @@ class RenderFrame:
     lines: list[str]
     page: str = "status"
     header_right: str = ""
+    battery_percent: int | None = None
+    charging: bool | None = None
+    low_power: bool = False
 
 
 class Renderer(Protocol):
@@ -65,6 +68,9 @@ class TextRenderer:
                 title=f"{c.name}  Lv{c.level}",
                 page="status",
                 header_right=battery_badge,
+                battery_percent=battery,
+                charging=state.device.charging,
+                low_power=state.device.low_power_mode,
                 lines=[
                     f"{c.title} / {c.specialization}",
                     f"P{c.stats.power} V{c.stats.vitality}  A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
@@ -87,12 +93,18 @@ class TextRenderer:
                 title=f"{c.name}  Loadout",
                 page="gear",
                 header_right=battery_badge,
+                battery_percent=battery,
+                charging=state.device.charging,
+                low_power=state.device.low_power_mode,
                 lines=self._build_gear_lines(state, engine),
             ),
             RenderFrame(
                 title=f"{c.name}  Chronicle",
                 page="log",
                 header_right=battery_badge,
+                battery_percent=battery,
+                charging=state.device.charging,
+                low_power=state.device.low_power_mode,
                 lines=self._build_log_lines(state),
             ),
         ]
@@ -263,19 +275,43 @@ class WaveshareRenderer(TextRenderer):
         self._draw_list_page(draw, font, frame, width, height, icon_set=["log", "log", "log", "log", "log", "log"])
 
     def _draw_header(self, draw, font, frame: RenderFrame, width: int) -> None:
-        draw.rectangle((0, 0, width - 1, 19), outline=0, fill=255)
-        draw.rectangle((0, 0, width - 1, 15), outline=0, fill=255)
-        draw.text((6, 3), frame.title[:20], font=font, fill=0)
-        badge = frame.header_right[:6]
-        badge_width = 34
-        draw.rounded_rectangle((width - badge_width - 5, 2, width - 5, 14), radius=3, outline=0, fill=255)
-        self._draw_icon(draw, "battery", width - badge_width - 2, 5)
-        draw.text((width - badge_width + 10, 4), badge, font=font, fill=0)
+        draw.rectangle((0, 0, width - 1, 15), outline=0, fill=0)
+        draw.text((6, 3), frame.title[:20], font=font, fill=255)
+        badge_width = 45
+        bx0 = width - badge_width - 5
+        draw.rounded_rectangle((bx0, 2, width - 5, 14), radius=3, outline=255, fill=0)
+        self._draw_battery_meter(draw, bx0 + 4, 4, frame)
+        draw.text((bx0 + 20, 4), frame.header_right[:6], font=font, fill=255)
         pill_text = frame.page.upper()[:6]
         pill_width = 8 + len(pill_text) * 6
-        draw.rounded_rectangle((5, 17, 5 + pill_width, 28), radius=3, outline=0, fill=255)
-        draw.text((9, 19), pill_text, font=font, fill=0)
+        draw.rounded_rectangle((5, 17, 5 + pill_width, 28), radius=3, outline=0, fill=0)
+        draw.text((9, 19), pill_text, font=font, fill=255)
+        self._draw_page_dots(draw, width - 30, 21, frame.page)
         draw.line((0, 31, width - 1, 31), fill=0, width=1)
+
+    def _draw_battery_meter(self, draw, x: int, y: int, frame: RenderFrame) -> None:
+        draw.rectangle((x, y, x + 11, y + 6), outline=255, fill=0)
+        draw.rectangle((x + 12, y + 2, x + 13, y + 4), outline=255, fill=255)
+        percent = frame.battery_percent if frame.battery_percent is not None else 0
+        fill_w = max(0, min(9, round(percent / 100 * 9)))
+        if fill_w > 0:
+            fill_color = 255
+            if frame.low_power:
+                fill_color = 255
+            draw.rectangle((x + 1, y + 1, x + fill_w, y + 5), outline=fill_color, fill=fill_color)
+        if frame.charging:
+            draw.line((x + 5, y + 1, x + 4, y + 3), fill=0, width=1)
+            draw.line((x + 4, y + 3, x + 7, y + 3), fill=0, width=1)
+            draw.line((x + 7, y + 3, x + 5, y + 5), fill=0, width=1)
+
+    def _draw_page_dots(self, draw, x: int, y: int, page: str) -> None:
+        order = ["status", "gear", "log"]
+        for index, name in enumerate(order):
+            x0 = x + index * 8
+            fill = 0 if name == page else 255
+            draw.ellipse((x0, y, x0 + 4, y + 4), outline=0, fill=fill)
+            if name != page:
+                draw.ellipse((x0 + 1, y + 1, x0 + 3, y + 3), outline=255, fill=255)
 
     def _draw_status_page(self, draw, font, frame: RenderFrame, width: int, height: int) -> None:
         cards = frame.lines[:8]
@@ -320,73 +356,76 @@ class WaveshareRenderer(TextRenderer):
 
     def _draw_card(self, draw, font, x: int, y: int, w: int, h: int, text: str, icon_name: str) -> None:
         draw.rectangle((x, y, x + w, y + h), outline=0, fill=255)
-        self._draw_icon(draw, icon_name, x + 4, y + 5)
+        draw.rectangle((x + 1, y + 1, x + 14, y + h - 1), outline=0, fill=0)
+        self._draw_icon(draw, icon_name, x + 3, y + 5, invert=True)
         wrapped = self._wrap_text(text, max_chars=15)
         if wrapped:
             draw.text((x + 18, y + 3), wrapped[0], font=font, fill=0)
         if len(wrapped) > 1:
             draw.text((x + 18, y + 10), wrapped[1], font=font, fill=0)
 
-    def _draw_icon(self, draw, icon_name: str, x: int, y: int) -> None:
+    def _draw_icon(self, draw, icon_name: str, x: int, y: int, invert: bool = False) -> None:
+        ink = 255 if invert else 0
+        paper = 0 if invert else 255
         if icon_name == "battery":
-            draw.rectangle((x, y, x + 9, y + 6), outline=0, fill=255)
-            draw.rectangle((x + 10, y + 2, x + 11, y + 4), outline=0, fill=255)
+            draw.rectangle((x, y, x + 9, y + 6), outline=ink, fill=paper)
+            draw.rectangle((x + 10, y + 2, x + 11, y + 4), outline=ink, fill=ink)
             return
         if icon_name == "star":
-            draw.polygon([(x + 4, y), (x + 5, y + 3), (x + 8, y + 3), (x + 6, y + 5), (x + 7, y + 8), (x + 4, y + 6), (x + 1, y + 8), (x + 2, y + 5), (x, y + 3), (x + 3, y + 3)], outline=0)
+            draw.polygon([(x + 4, y), (x + 5, y + 3), (x + 8, y + 3), (x + 6, y + 5), (x + 7, y + 8), (x + 4, y + 6), (x + 1, y + 8), (x + 2, y + 5), (x, y + 3), (x + 3, y + 3)], outline=ink)
             return
         if icon_name == "stats":
-            draw.rectangle((x, y + 4, x + 1, y + 8), outline=0, fill=0)
-            draw.rectangle((x + 3, y + 2, x + 4, y + 8), outline=0, fill=0)
-            draw.rectangle((x + 6, y, x + 7, y + 8), outline=0, fill=0)
+            draw.rectangle((x, y + 4, x + 1, y + 8), outline=ink, fill=ink)
+            draw.rectangle((x + 3, y + 2, x + 4, y + 8), outline=ink, fill=ink)
+            draw.rectangle((x + 6, y, x + 7, y + 8), outline=ink, fill=ink)
             return
         if icon_name == "act":
-            draw.polygon([(x, y + 4), (x + 4, y), (x + 8, y + 4), (x + 4, y + 8)], outline=0)
+            draw.polygon([(x, y + 4), (x + 4, y), (x + 8, y + 4), (x + 4, y + 8)], outline=ink)
             return
         if icon_name == "skull":
-            draw.ellipse((x, y, x + 8, y + 6), outline=0)
-            draw.rectangle((x + 2, y + 6, x + 6, y + 8), outline=0)
+            draw.ellipse((x, y, x + 8, y + 6), outline=ink)
+            draw.rectangle((x + 2, y + 6, x + 6, y + 8), outline=ink)
             return
         if icon_name == "coin":
-            draw.ellipse((x, y, x + 8, y + 8), outline=0)
-            draw.line((x + 2, y + 4, x + 6, y + 4), fill=0, width=1)
+            draw.ellipse((x, y, x + 8, y + 8), outline=ink)
+            draw.line((x + 2, y + 4, x + 6, y + 4), fill=ink, width=1)
             return
         if icon_name == "map":
-            draw.rectangle((x, y, x + 8, y + 8), outline=0)
-            draw.line((x + 3, y, x + 3, y + 8), fill=0, width=1)
-            draw.line((x + 6, y, x + 6, y + 8), fill=0, width=1)
+            draw.rectangle((x, y, x + 8, y + 8), outline=ink)
+            draw.line((x + 3, y, x + 3, y + 8), fill=ink, width=1)
+            draw.line((x + 6, y, x + 6, y + 8), fill=ink, width=1)
             return
         if icon_name == "crown":
-            draw.polygon([(x, y + 8), (x + 1, y + 2), (x + 4, y + 5), (x + 7, y + 1), (x + 8, y + 8)], outline=0)
+            draw.polygon([(x, y + 8), (x + 1, y + 2), (x + 4, y + 5), (x + 7, y + 1), (x + 8, y + 8)], outline=ink)
             return
         if icon_name == "alert":
-            draw.polygon([(x + 4, y), (x + 8, y + 8), (x, y + 8)], outline=0)
-            draw.line((x + 4, y + 3, x + 4, y + 5), fill=0, width=1)
+            draw.polygon([(x + 4, y), (x + 8, y + 8), (x, y + 8)], outline=ink)
+            draw.line((x + 4, y + 3, x + 4, y + 5), fill=ink, width=1)
             return
         if icon_name == "blade":
-            draw.line((x + 1, y + 7, x + 7, y + 1), fill=0, width=1)
-            draw.line((x, y + 8, x + 2, y + 6), fill=0, width=1)
+            draw.line((x + 1, y + 7, x + 7, y + 1), fill=ink, width=1)
+            draw.line((x, y + 8, x + 2, y + 6), fill=ink, width=1)
             return
         if icon_name == "armor":
-            draw.polygon([(x + 1, y + 1), (x + 7, y + 1), (x + 8, y + 3), (x + 6, y + 8), (x + 2, y + 8), (x, y + 3)], outline=0)
+            draw.polygon([(x + 1, y + 1), (x + 7, y + 1), (x + 8, y + 3), (x + 6, y + 8), (x + 2, y + 8), (x, y + 3)], outline=ink)
             return
         if icon_name == "charm":
-            draw.ellipse((x + 1, y + 1, x + 7, y + 7), outline=0)
-            draw.line((x + 4, y, x + 4, y + 2), fill=0, width=1)
+            draw.ellipse((x + 1, y + 1, x + 7, y + 7), outline=ink)
+            draw.line((x + 4, y, x + 4, y + 2), fill=ink, width=1)
             return
         if icon_name == "bag":
-            draw.rectangle((x + 1, y + 3, x + 7, y + 8), outline=0)
-            draw.arc((x + 2, y, x + 6, y + 4), start=180, end=360, fill=0)
+            draw.rectangle((x + 1, y + 3, x + 7, y + 8), outline=ink)
+            draw.arc((x + 2, y, x + 6, y + 4), start=180, end=360, fill=ink)
             return
         if icon_name == "chip":
-            draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=0)
+            draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=ink)
             return
         if icon_name == "log":
-            draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=0)
-            draw.line((x + 2, y + 3, x + 6, y + 3), fill=0, width=1)
-            draw.line((x + 2, y + 5, x + 6, y + 5), fill=0, width=1)
+            draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=ink)
+            draw.line((x + 2, y + 3, x + 6, y + 3), fill=ink, width=1)
+            draw.line((x + 2, y + 5, x + 6, y + 5), fill=ink, width=1)
             return
-        draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=0)
+        draw.rectangle((x + 1, y + 1, x + 7, y + 7), outline=ink)
 
 
 def build_renderer(mode: str = "auto") -> Renderer:
