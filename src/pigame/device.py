@@ -65,32 +65,34 @@ class TextRenderer:
         )
         wait_text = "HOLD" if c.awaiting_player else "RUN"
         boss_text = (
-            f"Boss {state.world.boss_level}"
+            f"B {state.world.boss_level}"
             if state.world.boss_active
-            else f"Boss in {state.world.boss_countdown}"
+            else f"B {state.world.boss_countdown}"
         )
+        region_text = self._short_region(state.world.current_region)
+        spec_text = c.specialization[:4].upper()
+        title_text = self._fit_text(c.title, 12)
         return [
             RenderFrame(
-                title=f"{c.name}  Lv{c.level}",
+                title=f"{self._fit_text(c.name, 8)} L{c.level}",
                 page="status",
                 header_right=battery_badge,
                 battery_percent=battery,
                 charging=state.device.charging,
                 low_power=state.device.low_power_mode,
                 lines=[
-                    f"{c.title} / {c.specialization}",
-                    f"Act {c.current_activity} / Sup {c.supplies} / Gear {equipped}",
-                    f"P{c.stats.power} V{c.stats.vitality} / A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
-                    f"Depth {c.dungeon_depth} / W {c.wins} L {c.losses} / Mood {c.mood}",
-                    f"Gold {c.gold} / Stat {c.unspent_stat_points} / Perk {c.perk_points}",
-                    f"{state.world.current_region}",
-                    f"Danger {state.world.danger_rating} / Tier {state.world.biome_tier} / {boss_text}",
-                    f"State {wait_text} / Loss {c.loss_streak} / Perks {len(c.perks)}",
-                    f"AI {engine.ai_brief(state)}",
+                    f"{title_text} {spec_text}",
+                    f"{self._abbr_activity(c.current_activity)} S{c.supplies} G{equipped}",
+                    f"P{c.stats.power} V{c.stats.vitality}",
+                    f"A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
+                    f"D{c.dungeon_depth} W{c.wins} L{c.losses}",
+                    f"${c.gold} T{state.world.biome_tier} {boss_text}",
+                    f"{region_text} / RISK {state.world.danger_rating}",
+                    f"{wait_text} LS{c.loss_streak} ST{c.unspent_stat_points} PK{c.perk_points}",
                 ],
             ),
             RenderFrame(
-                title=f"{c.name}  Loadout",
+                title=f"{self._fit_text(c.name, 8)} GEAR",
                 page="gear",
                 header_right=battery_badge,
                 battery_percent=battery,
@@ -99,7 +101,7 @@ class TextRenderer:
                 lines=self._build_gear_lines(state, engine),
             ),
             RenderFrame(
-                title=f"{c.name}  Chronicle",
+                title=f"{self._fit_text(c.name, 8)} LOG",
                 page="log",
                 header_right=battery_badge,
                 battery_percent=battery,
@@ -119,13 +121,12 @@ class TextRenderer:
 
     def _build_gear_lines(self, state: SaveState, engine: GameEngine) -> list[str]:
         slots = {
-            "main_hand": "Main",
-            "body": "Body",
-            "charm": "Charm",
+            "main_hand": "MW",
+            "body": "BD",
+            "charm": "CH",
         }
         lines = [
-            f"Gear power {sum(item.power for item in state.inventory if item.equipped)}",
-            f"Inventory {len(state.inventory)} items",
+            f"PWR {sum(item.power for item in state.inventory if item.equipped)}",
         ]
         for slot_key, label in slots.items():
             item = next(
@@ -133,25 +134,25 @@ class TextRenderer:
                 None,
             )
             if item is None:
-                lines.append(f"{label}: empty")
+                lines.append(f"{label} -")
                 continue
             crafted = " *" if item.crafted else ""
-            lines.append(f"{label}: {item.name} +{item.power} q{item.quality}{crafted}")
+            lines.append(f"{label} {self._short_item_name(item.name)} +{item.power} q{item.quality}{crafted}")
         consumables = sum(item.quantity for item in state.inventory if item.item_type == "consumable")
         materials = sum(item.quantity for item in state.inventory if item.item_type == "material")
         blueprints = sum(item.quantity for item in state.inventory if item.item_type == "recipe")
-        lines.append(f"Use {consumables} / Mat {materials} / BP {blueprints}")
-        lines.append(f"Known recipes {len(state.character.known_recipes)}")
+        lines.append(f"INV {len(state.inventory)} U{consumables} M{materials} B{blueprints}")
+        lines.append(f"RCP {len(state.character.known_recipes)}")
         passives = engine.passive_effects(state)
         if passives:
-            lines.append(f"Passive: {passives[0]}")
+            lines.append(f"PERK {len(state.character.perks)}")
         return lines
 
     def _build_log_lines(self, state: SaveState) -> list[str]:
-        recent = list(reversed(state.activity_log[-3:]))
+        recent = list(reversed(state.activity_log[-2:]))
         if not recent:
             recent = ["No notable events yet."]
-        return [f"Last event: {state.world.last_event}", *recent]
+        return [self._short_event(state.world.last_event), *[self._short_event(line) for line in recent]]
 
 
 class ConsoleRenderer(TextRenderer):
@@ -269,6 +270,48 @@ class WaveshareRenderer(TextRenderer):
         if max_chars <= 3:
             return text[:max_chars]
         return text[: max_chars - 3] + "..."
+
+    def _abbr_activity(self, activity: str) -> str:
+        table = {
+            "dungeon": "DNG",
+            "camp": "CMP",
+            "rest": "RST",
+            "hunt": "HNT",
+            "ritual": "RIT",
+            "salvage": "SLV",
+        }
+        return table.get(activity, activity[:3].upper())
+
+    def _short_region(self, region: str) -> str:
+        table = {
+            "Moss Tunnels": "MOSS",
+            "Ash Vault": "ASH",
+            "Static Hollows": "STAT",
+            "Moon Well": "MOON",
+            "Glass Catacomb": "GLAS",
+        }
+        return table.get(region, self._fit_text(region.upper(), 4))
+
+    def _short_item_name(self, name: str) -> str:
+        compact = (
+            name.replace("Rust ", "")
+            .replace("Saber", "Sab")
+            .replace("Bone ", "")
+            .replace("Sparks", "Spark")
+            .replace("Charm of ", "")
+            .replace("Lucky ", "Luck ")
+        )
+        return self._fit_text(compact, 10)
+
+    def _short_event(self, text: str) -> str:
+        compact = (
+            text.replace("stays in camp awaiting guidance", "camp wait")
+            .replace("cleared depth", "clr d")
+            .replace("and broke through", "beat")
+            .replace("Boss prep incomplete.", "prep")
+            .replace("Repeated losses.", "loss")
+        )
+        return self._fit_text(compact, 28)
 
     def _draw_frame_ui(self, draw, font, frame: RenderFrame, width: int, height: int) -> None:
         self._draw_header(draw, font, frame, width)
