@@ -54,6 +54,7 @@ class GameRuntime:
         tick_count = 0
         while True:
             state = load_save(self.config.save_path)
+            self._reset_stale_shutdown_request(state)
             tick_count += 1
             result = self.engine.tick(state)
             battery_status = self.battery.read_status()
@@ -80,6 +81,16 @@ class GameRuntime:
             if self.config.sleep_when_idle:
                 time.sleep(self.config.tick_seconds)
         return 0
+
+    def _reset_stale_shutdown_request(self, state) -> None:
+        if not state.device.shutdown_requested:
+            return
+        state.device.shutdown_requested = False
+        state.device.low_power_mode = False
+        if state.device.last_shutdown_reason:
+            state.activity_log.append("Cleared stale shutdown request from previous power event.")
+        state.device.last_shutdown_reason = ""
+        state.activity_log = state.activity_log[-20:]
 
     def _build_battery_monitor(self, config: RuntimeConfig) -> BatteryMonitor:
         if config.battery_backend == "cw2015":
@@ -147,6 +158,10 @@ class GameRuntime:
             state.device.last_shutdown_reason = reason or "Critical battery level reached."
             state.world.last_event = state.device.last_shutdown_reason
             state.activity_log.append(state.device.last_shutdown_reason)
+        else:
+            state.device.shutdown_requested = False
+            if not low_power:
+                state.device.last_shutdown_reason = ""
 
         state.activity_log = state.activity_log[-20:]
 

@@ -77,7 +77,7 @@ class TextRenderer:
             RenderFrame(
                 title=f"{c.name} | Gear | lvl {c.level}",
                 page="gear",
-                lines=self._build_gear_lines(state),
+                lines=self._build_gear_lines(state, engine),
             ),
             RenderFrame(
                 title=f"{c.name} | Log | lvl {c.level}",
@@ -93,7 +93,7 @@ class TextRenderer:
     def render(self, frame: RenderFrame) -> str:
         return self.render_to_text(frame)
 
-    def _build_gear_lines(self, state: SaveState) -> list[str]:
+    def _build_gear_lines(self, state: SaveState, engine: GameEngine) -> list[str]:
         slots = {
             "main_hand": "Main",
             "body": "Body",
