@@ -83,6 +83,7 @@ If you use a different Linux username or install location, adjust the paths in:
 - `deploy/systemd/pigame.service`
 - `deploy/systemd/pigame-manager.service`
 - `run-pigame.sh`
+- `run-pigame-manager.sh`
 
 ## Run
 
@@ -115,8 +116,7 @@ Open `http://127.0.0.1:8080`.
 To expose the manager to a PC on the same network, bind it on all interfaces:
 
 ```bash
-cd /home/pizero/pigame
-PYTHONPATH=/home/pizero/pigame/src /home/pizero/pigame/.venv/bin/pigame-manager --host 0.0.0.0 --port 8080 --save /home/pizero/pigame/data/save.json
+/home/pizero/pigame/run-pigame-manager.sh
 ```
 
 Then open `http://<PI_IP>:8080` from the PC.

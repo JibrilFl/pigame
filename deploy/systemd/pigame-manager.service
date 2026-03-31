@@ -6,9 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pizero
-WorkingDirectory=/home/pizero/pigame
-Environment=PYTHONPATH=/home/pizero/pigame/src
-ExecStart=/home/pizero/pigame/.venv/bin/python -m pigame.desktop_server --host 0.0.0.0 --port 8080 --save /home/pizero/pigame/data/save.json
+ExecStart=/home/pizero/pigame/run-pigame-manager.sh
 Restart=always
 RestartSec=10
 
