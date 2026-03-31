@@ -1,217 +1,50 @@
 from __future__ import annotations
 
 import argparse
-import html
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .core import GameEngine
+from .core import GameEngine, PERK_DEFS, RECIPE_DEFS
 from .device import TextRenderer
 from .models import EquipmentSlot, Item, ItemType, SaveState, Specialization, zero_stats
 from .storage import DEFAULT_SAVE_PATH, auto_equip_inventory, infer_slot, load_save, save_state
 
 
-HTML = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>PiGame Manager</title>
-  <style>
-    :root {{
-      --bg: #efe7d6;
-      --panel: #fffaf0;
-      --ink: #1f1a16;
-      --line: #b7ac97;
-      --accent: #8b5e3c;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: Consolas, monospace; background: linear-gradient(180deg, #f5efdf, #e8dcc2); color: var(--ink); }}
-    main {{ max-width: 1180px; margin: 0 auto; padding: 24px; }}
-    h1, h2, h3 {{ margin: 0 0 12px; }}
-    p {{ margin: 0 0 12px; }}
-    .grid {{ display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; align-items: start; }}
-    .stack {{ display: grid; gap: 16px; }}
-    .panel {{ background: var(--panel); border: 1px solid var(--line); padding: 16px; box-shadow: 0 8px 24px rgba(34, 24, 15, 0.06); }}
-    .stats {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }}
-    .metric {{ padding: 10px; border: 1px solid var(--line); background: #fffef8; }}
-    .metric strong {{ display: block; font-size: 18px; margin-bottom: 4px; }}
-    .forms {{ display: grid; gap: 12px; }}
-    form {{ display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); background: #fffef8; }}
-    .inline-form {{ display: inline-grid; grid-auto-flow: column; gap: 6px; align-items: center; padding: 0; border: 0; background: transparent; }}
-    input, button, select {{ width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); background: white; }}
-    button {{ background: var(--accent); color: white; border-color: var(--accent); cursor: pointer; }}
-    button:hover {{ filter: brightness(0.94); }}
-    pre {{ margin: 0; padding: 14px; white-space: pre-wrap; overflow: auto; background: #fffef8; border: 1px solid var(--line); }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-    th, td {{ border-bottom: 1px solid #ddd2bc; padding: 8px 6px; text-align: left; vertical-align: top; }}
-    .pill {{ display: inline-block; padding: 2px 6px; border: 1px solid var(--line); background: #f7f0df; }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>PiGame Manager</h1>
-    <p>Desktop management for the idle e-ink pet. This page is meant for direct editing when the device is connected to a PC or local network.</p>
-
-    <div class="grid">
-      <section class="stack">
-        <div class="panel">
-          <h2>{name}</h2>
-          <p><span class="pill">{title}</span> <span class="pill">{specialization}</span> <span class="pill">Activity {activity}</span></p>
-          <div class="stats">
-            <div class="metric"><strong>Level {level}</strong>XP {xp}</div>
-            <div class="metric"><strong>Gold {gold}</strong>Supplies {supplies}</div>
-            <div class="metric"><strong>Depth {depth}</strong>Mood {mood}</div>
-            <div class="metric"><strong>Free Points {free_points}</strong>Manual stat allocation</div>
-            <div class="metric"><strong>Perk Points {perk_points}</strong>{perks_count} perks learned</div>
-            <div class="metric"><strong>Power {power}</strong>Vitality {vitality}</div>
-            <div class="metric"><strong>Agility {agility}</strong>Insight {insight}</div>
-            <div class="metric"><strong>Luck {luck}</strong>Wins {wins} / Losses {losses}</div>
-            <div class="metric"><strong>Loss Streak {loss_streak}</strong>{awaiting_status}</div>
-            <div class="metric"><strong>Bosses {bosses_defeated}</strong>Major clears recorded</div>
-            <div class="metric"><strong>Total P{total_power} V{total_vitality}</strong>Total A{total_agility} I{total_insight} L{total_luck}</div>
-            <div class="metric"><strong>Hero Power {hero_power}</strong>Computed combat score base</div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Current Screen</h2>
-          <pre>{screen}</pre>
-        </div>
-
-        <div class="panel">
-          <h2>Equipped Gear</h2>
-          {equipped_table}
-        </div>
-
-        <div class="panel">
-          <h2>Inventory</h2>
-          {inventory_table}
-        </div>
-
-        <div class="panel">
-          <h2>Recent Activity</h2>
-          {log_html}
-        </div>
-      </section>
-
-      <aside class="stack">
-        <div class="panel">
-          <h2>World</h2>
-          <p><strong>Region:</strong> {region}</p>
-          <p><strong>Threat:</strong> {threat}</p>
-          <p><strong>Boss:</strong> {boss_status}</p>
-          <p><strong>Danger:</strong> {danger}</p>
-          <p><strong>Biome tier:</strong> {biome_tier}</p>
-          <p><strong>Battery:</strong> {battery}</p>
-          <p><strong>Last event:</strong> {last_event}</p>
-        </div>
-
-        <div class="panel">
-          <h2>Specialization Passives</h2>
-          {passives_html}
-        </div>
-
-        <div class="panel">
-          <h2>Recipes</h2>
-          {recipes_html}
-        </div>
-
-        <div class="panel">
-          <h2>Perks</h2>
-          {perks_html}
-        </div>
-
-        <div class="panel">
-          <h2>Quick Actions</h2>
-          <div class="forms">
-            <form method="post" action="/grant">
-              <h3>Grant Item</h3>
-              <input name="name" value="Field Ration" />
-              <select name="item_type">
-                <option value="consumable">consumable</option>
-                <option value="weapon">weapon</option>
-                <option value="armor">armor</option>
-                <option value="charm">charm</option>
-                <option value="material">material</option>
-                <option value="recipe">recipe</option>
-              </select>
-              <input name="rarity" value="common" />
-              <input name="power" value="0" />
-              <input name="level" value="1" />
-              <input name="quality" value="0" />
-              <input name="recipe_code" value="" placeholder="recipe_code for blueprint" />
-              <button type="submit">Grant Item</button>
-            </form>
-
-            <form method="post" action="/supplies">
-              <h3>Add Supplies</h3>
-              <input name="amount" value="5" />
-              <button type="submit">Add Supplies</button>
-            </form>
-
-            <form method="post" action="/gold">
-              <h3>Add Gold</h3>
-              <input name="amount" value="100" />
-              <button type="submit">Add Gold</button>
-            </form>
-
-            <form method="post" action="/xp">
-              <h3>Add XP</h3>
-              <input name="amount" value="50" />
-              <button type="submit">Add XP</button>
-            </form>
-
-            <form method="post" action="/specialization">
-              <h3>Set Specialization</h3>
-              <select name="specialization">
-                {specialization_options}
-              </select>
-              <button type="submit">Apply Specialization</button>
-            </form>
-
-            <form method="post" action="/stat">
-              <h3>Spend Stat Point</h3>
-              <select name="stat">
-                <option value="power">power</option>
-                <option value="vitality">vitality</option>
-                <option value="agility">agility</option>
-                <option value="insight">insight</option>
-                <option value="luck">luck</option>
-              </select>
-              <button type="submit">Spend 1 Point</button>
-            </form>
-
-            <form method="post" action="/tick">
-              <h3>Advance Time</h3>
-              <input name="ticks" value="3" />
-              <button type="submit">Run Ticks</button>
-            </form>
-
-            <form method="post" action="/forge">
-              <h3>Forge / Salvage</h3>
-              <button type="submit">Run Crafting Step</button>
-            </form>
-
-            <form method="post" action="/resume">
-              <h3>Release From Camp</h3>
-              <button type="submit">Resume Autonomous Runs</button>
-            </form>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Raw Save</h2>
-          <pre>{state}</pre>
-        </div>
-      </aside>
-    </div>
-  </main>
-</body>
-</html>
-"""
+HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PiGame Manager</title>
+<style>
+:root{--bg:#f3ecdf;--panel:#fffaf1;--alt:#f7efdf;--line:#d1c0a7;--ink:#201a15;--muted:#675c4f;--accent:#7a4b2f;--accent2:#5d311b;--good:#27593b;--warn:#8a5b12;--bad:#8a2d20;--shadow:0 10px 28px rgba(39,27,18,.08)}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:radial-gradient(circle at top left,rgba(122,75,47,.14),transparent 28%),linear-gradient(180deg,#f8f1e2,#ece2ce 55%,#e4d7be);font-family:"Trebuchet MS","Segoe UI",sans-serif}
+.shell{max-width:1320px;margin:0 auto;padding:18px;display:grid;gap:16px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center;background:linear-gradient(135deg,#2c2119,#6d4025);color:#fff8ef;border-radius:22px;padding:18px 20px;box-shadow:var(--shadow)}
+.title h1{margin:0;font-family:Georgia,"Times New Roman",serif;font-size:clamp(28px,4vw,42px);line-height:1}.sub,.row,.toolbar,.actions,.status{display:flex;flex-wrap:wrap;gap:8px}.sub{margin-top:8px}.chip,.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);border-radius:999px;padding:6px 10px;font-size:13px;white-space:nowrap}.chip{color:var(--ink);background:#fbf6eb;border-color:var(--line)}.good{color:var(--good)!important}.warn{color:var(--warn)!important}.bad{color:var(--bad)!important}
+.workspace,.cols,.grid4,.grid3,.grid2,.stats,.list{display:grid;gap:12px}.workspace{grid-template-columns:minmax(0,1.45fr) minmax(320px,.95fr)}.grid4{grid-template-columns:repeat(4,minmax(0,1fr))}.grid3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid2,.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stats{grid-template-columns:repeat(5,minmax(0,1fr))}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);overflow:hidden}.head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;background:linear-gradient(180deg,#f9f2e5,#f1e5d2);border-bottom:1px solid var(--line)}.head h2,.head h3{margin:0;font-size:18px;font-family:Georgia,"Times New Roman",serif}.body{padding:16px;display:grid;gap:12px}
+.card,.item{background:linear-gradient(180deg,#fffdf8,var(--alt));border:1px solid var(--line);border-radius:16px;padding:14px;display:grid;gap:8px}.item{grid-template-columns:minmax(0,1fr) auto;align-items:center}.metric{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.big{font-size:clamp(20px,2vw,30px);font-weight:700;line-height:1}.muted{color:var(--muted);font-size:13px}
+button,select,input{font:inherit;border-radius:12px;border:1px solid var(--line);padding:10px 12px;background:#fff;color:var(--ink)}button{cursor:pointer;background:linear-gradient(180deg,var(--accent),var(--accent2));color:#fff7ef;border-color:transparent;box-shadow:0 6px 14px rgba(93,49,27,.18)}button.secondary{background:#fff7ea;color:var(--ink);border-color:var(--line);box-shadow:none}button.ghost{background:transparent;color:var(--muted);border-color:var(--line);box-shadow:none}button:disabled{opacity:.45;cursor:default;box-shadow:none}
+.preview{margin:0;background:#221a15;color:#f3e7d5;border-radius:14px;padding:14px;font-family:Consolas,monospace;white-space:pre-wrap;min-height:180px}.notice{position:sticky;top:12px;z-index:4;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:rgba(255,250,241,.95);box-shadow:var(--shadow);display:none}.notice.visible{display:block}.empty{padding:14px;border:1px dashed var(--line);border-radius:14px;color:var(--muted);background:#fffefb}pre.raw{margin:12px 0 0;padding:14px;border-radius:14px;border:1px solid var(--line);background:#fffef9;white-space:pre-wrap;overflow:auto;max-height:420px}.small{font-size:12px}
+@media (max-width:1080px){.workspace{grid-template-columns:1fr}.grid4,.grid3,.grid2,.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (max-width:720px){.shell{padding:10px}.grid4,.grid3,.grid2,.stats{grid-template-columns:1fr}.item{grid-template-columns:1fr}}
+</style></head><body><main class="shell"><div id="notice" class="notice"></div><div class="top"><div class="title"><h1>PiGame Manager</h1><div class="sub"><span class="pill">Live control</span><span class="pill">No page reloads</span><span class="pill">Local network</span></div></div><div class="row"><button class="secondary" data-action="refresh">Refresh</button><button class="secondary" data-action="tickQuick" data-ticks="1">Tick 1</button><button class="secondary" data-action="tickQuick" data-ticks="5">Tick 5</button><button class="secondary" data-action="tickQuick" data-ticks="15">Tick 15</button></div></div><div id="app" class="workspace"></div></main>
+<script>
+const store={data:null,sort:"recommended",filter:"all",search:"",busy:false};
+const esc=v=>String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const chip=(t,c="")=>`<span class="chip ${c}">${esc(t)}</span>`;
+const metric=(l,v,n="")=>`<div class="card"><div class="metric">${esc(l)}</div><div class="big">${esc(v)}</div><div class="muted">${esc(n)}</div></div>`;
+function itemCard(item,{equip=false,learn=false,craft=false}={}){const tags=[];if(item.equipped)tags.push(chip("Equipped","good"));if(item.recommended)tags.push(chip("Recommended","warn"));if(item.crafted)tags.push(chip("Crafted"));if(item.recipe_code)tags.push(chip(item.recipe_code));if(item.quantity>1)tags.push(chip(`x${item.quantity}`));const actions=[];if(equip&&item.can_equip)actions.push(`<button ${item.equipped?"disabled":""} data-action="equip" data-index="${item.index}">${item.equipped?"Equipped":"Equip"}</button>`);if(learn&&item.can_learn)actions.push(`<button data-action="learn" data-index="${item.index}">Learn</button>`);if(craft&&item.recipe_code)actions.push(`<button ${item.can_craft?"":"disabled"} data-action="craft" data-recipe="${esc(item.recipe_code)}">Craft</button>`);return `<div class="item"><div><div class="row"><strong>${esc(item.name)}</strong>${tags.join("")}</div><div class="row">${chip(`${item.type} · ${item.rarity}`)}${chip(`P ${item.power}`)}${chip(`Q ${item.quality}`)}${item.slot?chip(item.slot_label):""}${item.score?chip(`Score ${item.score}`):""}</div><div class="muted">${esc(item.summary)}</div></div><div class="actions">${actions.join("")}</div></div>`}
+function left(data){const hero=data.hero;const eq=data.equipment.map(slot=>`<div class="card"><div class="metric">${esc(slot.label)}</div>${slot.current?itemCard(slot.current):`<div class="empty">Nothing equipped in ${esc(slot.label)}.</div>`}${slot.has_upgrade&&slot.recommended?`<div class="card"><div class="metric">Suggested Upgrade</div><strong>${esc(slot.recommended.name)}</strong><div class="muted">${esc(slot.recommended.summary)}</div><button data-action="equip" data-index="${slot.recommended.index}">Equip Suggested</button></div>`:`<div class="card"><div class="metric">Suggested Upgrade</div><div class="muted">Current item is already the best known pick.</div></div>`}</div>`).join("");return `<section class="cols"><section class="panel"><div class="head"><h2>${esc(hero.name)}</h2><div class="status">${chip(hero.title)}${chip(hero.specialization)}${chip(hero.activity)}${chip(hero.awaiting_text,hero.awaiting_player?"warn":"good")}</div></div><div class="body">${hero.summary?`<div class="muted">${esc(hero.summary)}</div>`:""}<div class="grid4">${metric("Level",hero.level,`${hero.experience} XP`)}${metric("Hero Power",hero.hero_power,"Estimated combat score")}${metric("Gold",hero.gold,`${hero.supplies} supplies`)}${metric("Depth",hero.depth,`${hero.wins}W / ${hero.losses}L`)}</div><div class="grid2">${metric("Stat Points",hero.unspent_stat_points,"Manual allocation")}${metric("Perk Points",hero.perk_points,`${hero.perks.length} learned`)}</div><div class="stats">${metric("Power",hero.stats.power,`Total ${hero.total_stats.power}`)}${metric("Vitality",hero.stats.vitality,`Total ${hero.total_stats.vitality}`)}${metric("Agility",hero.stats.agility,`Total ${hero.total_stats.agility}`)}${metric("Insight",hero.stats.insight,`Total ${hero.total_stats.insight}`)}${metric("Luck",hero.stats.luck,`Total ${hero.total_stats.luck}`)}</div></div></section><section class="panel"><div class="head"><h2>Gear Board</h2><div class="status">${chip(`${data.inventory_summary.equipped_count} equipped`)}${chip(`${data.inventory_summary.materials} materials`)}${chip(`${data.inventory_summary.blueprints} blueprints`)}</div></div><div class="body"><div class="grid3">${eq}</div><div class="row"><button data-action="autoequip">Auto Equip Best</button><button class="secondary" data-action="forge">Forge / Salvage</button></div></div></section><section class="panel"><div class="head"><h2>Inventory</h2><div class="toolbar"><select id="inventory-filter"><option value="all">All items</option><option value="equippable">Equippable</option><option value="equipped">Equipped only</option><option value="recipes">Blueprints</option><option value="materials">Materials</option></select><select id="inventory-sort"><option value="recommended">Recommended first</option><option value="score">Highest score</option><option value="power">Highest power</option><option value="quality">Highest quality</option><option value="rarity">Highest rarity</option><option value="name">Name</option><option value="newest">Newest first</option></select><input id="inventory-search" placeholder="Search item name" value=""></div></div><div id="inventory-panel" class="body"></div></section><section class="panel"><div class="head"><h2>Live Device Preview</h2><div class="status">${chip(data.device.battery_text,data.device.low_power_mode?"warn":"")}${chip(data.world.boss_status,data.world.boss_active?"bad":"")}</div></div><div class="body"><pre class="preview">${esc(data.screen_preview)}</pre></div></section></section>`}
+function right(data){const attention=data.next_steps.length?data.next_steps.map(s=>`<div class="item"><div><div class="row">${chip(s.tone||"warn",s.tone||"warn")}<strong>${esc(s.title)}</strong></div><div class="muted">${esc(s.detail)}</div></div></div>`).join(""):`<div class="empty">No urgent interventions.</div>`;const statButtons=Object.entries(data.hero.stats).map(([k,v])=>`<div class="card"><div class="metric">${esc(k)}</div><div class="big">${esc(v)}</div><button ${data.hero.unspent_stat_points>0?"":"disabled"} data-action="stat" data-stat="${esc(k)}">Spend 1 point</button></div>`).join("");const learned=data.perks.learned.length?data.perks.learned.map(p=>`<div class="card"><strong>${esc(p.name)}</strong><div class="muted">${esc(p.description)}</div></div>`).join(""):`<div class="empty">No perks learned yet.</div>`;const avail=data.perks.available.length?data.perks.available.map(p=>`<div class="card"><div class="metric">${esc(p.code)}</div><strong>${esc(p.name)}</strong><div class="muted">${esc(p.description)}</div><button ${data.hero.perk_points>0?"":"disabled"} data-action="perk" data-perk="${esc(p.code)}">Learn Perk</button></div>`).join(""):`<div class="empty">No perk choices available right now.</div>`;const known=data.recipes.known.length?data.recipes.known.map(r=>`<div class="card"><div class="row"><strong>${esc(r.name)}</strong>${chip(r.code)}${r.can_craft?chip("Ready","good"):chip("Missing parts","warn")}</div><div class="muted">Needs ${r.materials} materials and ${r.gold} gold. ${esc(r.status)}</div><button ${r.can_craft?"":"disabled"} data-action="craft" data-recipe="${esc(r.code)}">Craft</button></div>`).join(""):`<div class="empty">No learned recipes yet.</div>`;const drops=data.recipes.blueprints.length?data.recipes.blueprints.map(i=>itemCard(i,{learn:true})).join(""):`<div class="empty">No blueprint drops waiting.</div>`;const log=data.activity_log.length?data.activity_log.map(line=>`<div class="card"><div class="muted">${esc(line)}</div></div>`).join(""):`<div class="empty">No recent activity yet.</div>`;return `<aside class="cols"><section class="panel"><div class="head"><h2>What Needs You</h2><div class="status">${chip(`Loss streak ${data.hero.loss_streak}`,data.hero.loss_streak>=2?"bad":"")}${chip(`Danger ${data.world.danger_rating}`)}</div></div><div class="body"><div class="list">${attention}</div><div class="grid3"><div class="card"><div class="metric">Specialization</div><select id="specialization-select">${data.specializations.map(s=>`<option value="${esc(s)}" ${s===data.hero.specialization?"selected":""}>${esc(s)}</option>`).join("")}</select><button data-action="specialization">Apply</button></div><div class="card"><div class="metric">Manual Time Advance</div><input id="ticks-input" type="number" min="1" max="50" value="3"><button data-action="tick">Run Ticks</button></div><div class="card"><div class="metric">Camp Hold</div><div class="muted">${esc(data.hero.awaiting_text)}</div><button ${data.hero.awaiting_player?"":"disabled"} data-action="resume">Resume Runs</button></div></div></div></section><section class="panel"><div class="head"><h2>World and Battery</h2><div class="status">${chip(data.world.region)}${chip(data.world.threat)}</div></div><div class="body"><div class="grid2">${metric("Biome Tier",data.world.biome_tier,`Danger ${data.world.danger_rating}`)}${metric("Battery",data.device.battery_percent??"?",data.device.battery_detail)}</div><div class="card"><div class="metric">Boss</div><strong>${esc(data.world.boss_status)}</strong><div class="muted">${esc(data.world.last_event)}</div></div><div class="card"><div class="metric">Specialization Passives</div>${(data.passives||[]).map(line=>`<div class="muted">${esc(line)}</div>`).join("")||`<div class="muted">No passive summary.</div>`}</div></div></section><section class="panel"><div class="head"><h2>Progression</h2><div class="status">${chip(`${data.recipes.known.length} recipes`)}${chip(`${data.perks.learned.length} perks`)}</div></div><div class="body"><div class="panel"><div class="head"><h3>Stat Spending</h3></div><div class="body"><div class="stats">${statButtons}</div></div></div><div class="panel"><div class="head"><h3>Perks</h3></div><div class="body"><div class="grid2">${learned}</div><div class="grid2">${avail}</div></div></div><div class="panel"><div class="head"><h3>Recipes</h3></div><div class="body"><div class="grid2">${known}</div><div class="grid2">${drops}</div></div></div></div></section><section class="panel"><div class="head"><h2>Recent Activity</h2><button class="ghost" data-action="refresh">Refresh</button></div><div class="body"><div class="list">${log}</div></div></section><section class="panel"><div class="head"><h2>Developer Tools</h2><span class="muted small">Keep hidden during normal play</span></div><div class="body"><details><summary>Open raw save and manual grants</summary><div class="grid3" style="margin-top:12px"><div class="card"><div class="metric">Add Supplies</div><input id="dev-supplies" type="number" value="5"><button data-action="supplies">Apply</button></div><div class="card"><div class="metric">Add Gold</div><input id="dev-gold" type="number" value="100"><button data-action="gold">Apply</button></div><div class="card"><div class="metric">Add XP</div><input id="dev-xp" type="number" value="50"><button data-action="xp">Apply</button></div></div><pre class="raw">${esc(JSON.stringify(data.raw_state,null,2))}</pre></details></div></section></aside>`}
+function match(item){if(store.filter==="equippable"&&!item.can_equip)return false;if(store.filter==="equipped"&&!item.equipped)return false;if(store.filter==="recipes"&&item.type!=="recipe")return false;if(store.filter==="materials"&&item.type!=="material")return false;if(store.search&&!item.name.toLowerCase().includes(store.search.toLowerCase()))return false;return true}
+function sortItems(items){const rr={common:0,uncommon:1,rare:2,epic:3,mythic:4};const list=[...items].filter(match);list.sort((a,b)=>{if(store.sort==="name")return a.name.localeCompare(b.name);if(store.sort==="power")return b.power-a.power||b.quality-a.quality;if(store.sort==="quality")return b.quality-a.quality||b.power-a.power;if(store.sort==="rarity")return (rr[b.rarity]??0)-(rr[a.rarity]??0)||b.power-a.power;if(store.sort==="score")return (b.score??0)-(a.score??0)||b.power-a.power;if(store.sort==="newest")return b.index-a.index;return Number(b.recommended)-Number(a.recommended)||Number(b.equipped)-Number(a.equipped)||(b.score??0)-(a.score??0)});return list}
+function renderInventory(){const panel=document.getElementById("inventory-panel");if(!panel||!store.data)return;const items=sortItems(store.data.inventory);panel.innerHTML=items.length?`<div class="list">${items.map(i=>itemCard(i,{equip:true,learn:true})).join("")}</div>`:`<div class="empty">Nothing matches this inventory view.</div>`;const f=document.getElementById("inventory-filter"),s=document.getElementById("inventory-sort"),q=document.getElementById("inventory-search");if(f)f.value=store.filter;if(s)s.value=store.sort;if(q)q.value=store.search}
+function render(){const app=document.getElementById("app");if(!app||!store.data)return;app.innerHTML=`${left(store.data)}${right(store.data)}`;renderInventory()}
+function notice(msg,t="good"){const n=document.getElementById("notice");if(!n)return;n.textContent=msg;n.className=`notice visible ${t}`;clearTimeout(notice.timer);notice.timer=setTimeout(()=>n.className="notice",3200)}
+async function fetchState(silent=false){if(!silent)store.busy=true;const r=await fetch("/api/manager-state");store.data=await r.json();render();store.busy=false}
+async function run(action,payload={}){if(store.busy)return;store.busy=true;try{const r=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...payload})});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.message||`Action failed: ${action}`);store.data=data.state;render();notice(data.message||"Action completed.")}catch(e){notice(e.message||"Action failed.","bad")}finally{store.busy=false}}
+document.addEventListener("change",e=>{const t=e.target;if(t.id==="inventory-filter"){store.filter=t.value;renderInventory()}if(t.id==="inventory-sort"){store.sort=t.value;renderInventory()}if(t.id==="inventory-search"){store.search=t.value;renderInventory()}});document.addEventListener("input",e=>{const t=e.target;if(t.id==="inventory-search"){store.search=t.value;renderInventory()}});
+document.addEventListener("click",async e=>{const b=e.target.closest("[data-action]");if(!b)return;const a=b.dataset.action;if(a==="refresh"){await fetchState(true);notice("State refreshed.");return}if(a==="equip"){await run("equip",{index:Number(b.dataset.index)});return}if(a==="learn"){await run("learn",{index:Number(b.dataset.index)});return}if(a==="craft"){await run("craft",{recipe_code:b.dataset.recipe});return}if(a==="perk"){await run("perk",{perk_code:b.dataset.perk});return}if(a==="stat"){await run("stat",{stat:b.dataset.stat});return}if(a==="tickQuick"){await run("tick",{ticks:Number(b.dataset.ticks||"1")});return}if(a==="tick"){await run("tick",{ticks:Number(document.getElementById("ticks-input")?.value||"1")});return}if(a==="specialization"){await run("specialization",{specialization:document.getElementById("specialization-select")?.value||""});return}if(a==="supplies"||a==="gold"||a==="xp"){await run(a,{amount:Number(document.getElementById(`dev-${a}`)?.value||"0")});return}await run(a)});
+fetchState().catch(e=>notice(e.message||"Failed to load manager.","bad"));
+</script></body></html>"""
 
 
 class ManagerHandler(BaseHTTPRequestHandler):
@@ -225,388 +58,534 @@ class ManagerHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/state":
             self._send_json(state.to_dict())
             return
+        if parsed.path == "/api/manager-state":
+            self._send_json(self._build_manager_state(state))
+            return
         if parsed.path != "/":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        body = self._build_home(state)
-        self._send_html(body)
+        self._send_html(HTML)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8")
-        form = parse_qs(raw, keep_blank_values=True)
         state = load_save(self.save_path)
-
-        if parsed.path == "/grant":
-            item = Item(
-                name=form.get("name", ["Item"])[0],
-                item_type=form.get("item_type", ["material"])[0],
-                rarity=form.get("rarity", ["common"])[0],
-                power=int(form.get("power", ["0"])[0]),
-                level=int(form.get("level", ["1"])[0]),
-                quality=int(form.get("quality", ["0"])[0]),
-                quantity=1,
-                slot=infer_slot(form.get("item_type", ["material"])[0]),
-                stat_bonuses=zero_stats(),
-                recipe_code=form.get("recipe_code", [""])[0],
-            )
-            state.inventory.append(item)
-            state.activity_log.append(f"Manager granted item: {item.name}.")
-            save_state(state, self.save_path)
-            self._redirect_home()
+        payload = self._parse_payload()
+        if parsed.path == "/api/action":
+            self._handle_api_action(state, str(payload.get("action", "")), payload)
             return
-
-        if parsed.path == "/supplies":
-            amount = int(form.get("amount", ["0"])[0])
-            state.character.supplies += amount
-            state.activity_log.append(f"Manager added {amount} supplies.")
-            save_state(state, self.save_path)
-            self._redirect_home()
+        action = parsed.path.lstrip("/")
+        if not action:
+            self.send_error(HTTPStatus.NOT_FOUND)
             return
-
-        if parsed.path == "/gold":
-            amount = int(form.get("amount", ["0"])[0])
-            state.character.gold += amount
-            state.activity_log.append(f"Manager added {amount} gold.")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/xp":
-            amount = int(form.get("amount", ["0"])[0])
-            state.character.experience += amount
-            state.activity_log.append(f"Manager added {amount} XP.")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/specialization":
-            chosen = form.get("specialization", [state.character.specialization])[0]
-            valid = {spec.value for spec in Specialization}
-            if chosen in valid:
-                state.character.specialization = chosen
-                state.character.awaiting_player = False
-                state.character.awaiting_reason = ""
-                state.character.loss_streak = 0
-                state.activity_log.append(f"Manager set specialization to {chosen}.")
-                save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/stat":
-            stat_name = form.get("stat", ["power"])[0]
-            if state.character.unspent_stat_points > 0 and hasattr(state.character.stats, stat_name):
-                setattr(
-                    state.character.stats,
-                    stat_name,
-                    getattr(state.character.stats, stat_name) + 1,
-                )
-                state.character.unspent_stat_points -= 1
-                state.character.awaiting_player = False
-                state.character.awaiting_reason = ""
-                state.character.loss_streak = 0
-                state.activity_log.append(f"Manager spent 1 stat point on {stat_name}.")
-                save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/equip":
-            index = int(form.get("index", ["-1"])[0])
-            if 0 <= index < len(state.inventory):
-                item = state.inventory[index]
-                if item.slot is not None:
-                    for other in state.inventory:
-                        if other.slot == item.slot:
-                            other.equipped = False
-                    item.equipped = True
-                    state.character.awaiting_player = False
-                    state.character.awaiting_reason = ""
-                    state.character.loss_streak = 0
-                    state.activity_log.append(f"Manager equipped {item.name}.")
-                    save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/autoequip":
-            if auto_equip_inventory(state):
-                state.character.awaiting_player = False
-                state.character.awaiting_reason = ""
-                state.character.loss_streak = 0
-                state.activity_log.append("Manager triggered auto-equip.")
-                save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/tick":
-            ticks = max(1, min(50, int(form.get("ticks", ["1"])[0])))
-            for _ in range(ticks):
-                self.engine.tick(state)
-            state.activity_log.append(f"Manager advanced {ticks} ticks.")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/forge":
-            summary, _loot = self.engine.forge(state)
-            state.activity_log.append(f"Manager triggered forge: {summary}")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/learn":
-            summary = self.engine.learn_recipe(state, int(form.get("index", ["-1"])[0]))
-            state.activity_log.append(f"Manager learn action: {summary}")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/craft":
-            summary, _loot = self.engine.craft_recipe(state, form.get("recipe_code", [""])[0])
-            state.activity_log.append(f"Manager craft action: {summary}")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/resume":
-            state.character.awaiting_player = False
-            state.character.awaiting_reason = ""
-            state.character.loss_streak = 0
-            state.activity_log.append("Manager released hero from camp hold.")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        if parsed.path == "/perk":
-            summary = self.engine.choose_perk(state, form.get("perk_code", [""])[0])
-            state.activity_log.append(f"Manager perk action: {summary}")
-            save_state(state, self.save_path)
-            self._redirect_home()
-            return
-
-        self.send_error(HTTPStatus.NOT_FOUND)
+        self._handle_legacy_action(state, action, payload)
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
-    def _build_home(self, state: SaveState) -> str:
+    def _parse_payload(self) -> dict[str, object]:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
+        content_type = self.headers.get("Content-Type", "")
+        if "application/json" in content_type:
+            try:
+                parsed = json.loads(raw or "{}")
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        form = parse_qs(raw, keep_blank_values=True)
+        return {key: values[0] if values else "" for key, values in form.items()}
+
+    def _handle_api_action(self, state: SaveState, action: str, payload: dict[str, object]) -> None:
+        ok, message = self._apply_action(state, action, payload)
+        if ok:
+            save_state(state, self.save_path)
+        final_state = load_save(self.save_path) if ok else state
+        status = HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST
+        self._send_json(
+            {"ok": ok, "message": message, "state": self._build_manager_state(final_state)},
+            status=status,
+        )
+
+    def _handle_legacy_action(self, state: SaveState, action: str, payload: dict[str, object]) -> None:
+        ok, _message = self._apply_action(state, action, payload)
+        if ok:
+            save_state(state, self.save_path)
+        self._redirect_home()
+
+    def _apply_action(self, state: SaveState, action: str, payload: dict[str, object]) -> tuple[bool, str]:
+        if action == "grant":
+            item_type = str(payload.get("item_type", "material"))
+            item = Item(
+                name=str(payload.get("name", "Item")),
+                item_type=item_type,
+                rarity=str(payload.get("rarity", "common")),
+                power=self._to_int(payload.get("power"), 0),
+                level=self._to_int(payload.get("level"), 1),
+                quality=self._to_int(payload.get("quality"), 0),
+                quantity=1,
+                slot=infer_slot(item_type),
+                stat_bonuses=zero_stats(),
+                recipe_code=str(payload.get("recipe_code", "")),
+            )
+            state.inventory.append(item)
+            state.activity_log.append(f"Manager granted item: {item.name}.")
+            return True, f"Granted item: {item.name}."
+
+        if action == "supplies":
+            amount = self._to_int(payload.get("amount"), 0)
+            state.character.supplies += amount
+            state.activity_log.append(f"Manager added {amount} supplies.")
+            return True, f"Added {amount} supplies."
+
+        if action == "gold":
+            amount = self._to_int(payload.get("amount"), 0)
+            state.character.gold += amount
+            state.activity_log.append(f"Manager added {amount} gold.")
+            return True, f"Added {amount} gold."
+
+        if action == "xp":
+            amount = self._to_int(payload.get("amount"), 0)
+            state.character.experience += amount
+            state.activity_log.append(f"Manager added {amount} XP.")
+            return True, f"Added {amount} XP."
+
+        if action == "specialization":
+            chosen = str(payload.get("specialization", state.character.specialization))
+            valid = {spec.value for spec in Specialization}
+            if chosen not in valid:
+                return False, "Unknown specialization."
+            state.character.specialization = chosen
+            self._clear_hold(state)
+            state.activity_log.append(f"Manager set specialization to {chosen}.")
+            return True, f"Specialization changed to {chosen}."
+
+        if action == "stat":
+            stat_name = str(payload.get("stat", "power"))
+            if state.character.unspent_stat_points <= 0:
+                return False, "No stat points available."
+            if not hasattr(state.character.stats, stat_name):
+                return False, "Unknown stat."
+            setattr(state.character.stats, stat_name, getattr(state.character.stats, stat_name) + 1)
+            state.character.unspent_stat_points -= 1
+            self._clear_hold(state)
+            state.activity_log.append(f"Manager spent 1 stat point on {stat_name}.")
+            return True, f"Spent 1 point on {stat_name}."
+
+        if action == "equip":
+            index = self._to_int(payload.get("index"), -1)
+            if not (0 <= index < len(state.inventory)):
+                return False, "No such inventory item."
+            item = state.inventory[index]
+            if item.slot is None:
+                return False, "This item cannot be equipped."
+            for other in state.inventory:
+                if other.slot == item.slot:
+                    other.equipped = False
+            item.equipped = True
+            self._clear_hold(state)
+            state.activity_log.append(f"Manager equipped {item.name}.")
+            return True, f"Equipped {item.name}."
+
+        if action == "autoequip":
+            if not auto_equip_inventory(state):
+                return False, "Current gear is already optimal."
+            self._clear_hold(state)
+            state.activity_log.append("Manager triggered auto-equip.")
+            return True, "Equipped the best known items."
+
+        if action == "tick":
+            ticks = max(1, min(50, self._to_int(payload.get("ticks"), 1)))
+            for _ in range(ticks):
+                self.engine.tick(state)
+            state.activity_log.append(f"Manager advanced {ticks} ticks.")
+            return True, f"Advanced {ticks} ticks."
+
+        if action == "forge":
+            summary, _loot = self.engine.forge(state)
+            state.activity_log.append(f"Manager triggered forge: {summary}")
+            return True, summary
+
+        if action == "learn":
+            summary = self.engine.learn_recipe(state, self._to_int(payload.get("index"), -1))
+            state.activity_log.append(f"Manager learn action: {summary}")
+            bad = summary.startswith("No such") or "not a recipe" in summary
+            return not bad, summary
+
+        if action == "craft":
+            summary, _loot = self.engine.craft_recipe(state, str(payload.get("recipe_code", "")))
+            state.activity_log.append(f"Manager craft action: {summary}")
+            bad = "unknown" in summary.lower() or "not enough" in summary.lower()
+            return not bad, summary
+
+        if action == "resume":
+            self._clear_hold(state)
+            state.activity_log.append("Manager released hero from camp hold.")
+            return True, "Hero released from camp hold."
+
+        if action == "perk":
+            summary = self.engine.choose_perk(state, str(payload.get("perk_code", "")))
+            state.activity_log.append(f"Manager perk action: {summary}")
+            bad = (
+                "No perk points" in summary
+                or "Unknown perk" in summary
+                or "does not match" in summary
+                or "already chosen" in summary
+            )
+            return not bad, summary
+
+        return False, "Unknown action."
+
+    def _build_manager_state(self, state: SaveState) -> dict[str, object]:
         frame = self.renderer.build_frame(state, self.engine)
         c = state.character
         total_stats = self.engine.total_stats(state)
-        hero_power = self.engine.hero_power(state)
-        battery = (
-            f"{state.device.battery_percent}% / {state.device.battery_voltage:.2f}V"
-            if state.device.battery_percent is not None and state.device.battery_voltage is not None
-            else "unknown"
-        )
-        boss_status = (
-            f"{state.world.boss_name} (lvl {state.world.boss_level})"
-            if state.world.boss_active
-            else f"idle, next in {state.world.boss_countdown} clears"
-        )
-        awaiting_status = (
-            f"Waiting: {state.character.awaiting_reason}"
-            if state.character.awaiting_player
-            else "Autonomous"
-        )
-        return HTML.format(
-            name=html.escape(c.name),
-            title=html.escape(c.title),
-            specialization=html.escape(c.specialization),
-            activity=html.escape(c.current_activity),
-            level=c.level,
-            xp=c.experience,
-            gold=c.gold,
-            supplies=c.supplies,
-            depth=c.dungeon_depth,
-            mood=c.mood,
-            free_points=c.unspent_stat_points,
-            perk_points=c.perk_points,
-            perks_count=len(c.perks),
-            power=c.stats.power,
-            vitality=c.stats.vitality,
-            agility=c.stats.agility,
-            insight=c.stats.insight,
-            luck=c.stats.luck,
-            loss_streak=c.loss_streak,
-            awaiting_status=html.escape(awaiting_status),
-            bosses_defeated=c.bosses_defeated,
-            total_power=total_stats.power,
-            total_vitality=total_stats.vitality,
-            total_agility=total_stats.agility,
-            total_insight=total_stats.insight,
-            total_luck=total_stats.luck,
-            hero_power=hero_power,
-            wins=c.wins,
-            losses=c.losses,
-            region=html.escape(state.world.current_region),
-            threat=html.escape(state.world.current_threat),
-            boss_status=html.escape(boss_status),
-            danger=state.world.danger_rating,
-            biome_tier=state.world.biome_tier,
-            battery=html.escape(battery),
-            last_event=html.escape(state.world.last_event),
-            passives_html=self._render_passives(self.engine.passive_effects(state)),
-            recipes_html=self._render_recipes(state),
-            perks_html=self._render_perks(state),
-            screen=html.escape(self.renderer.render_to_text(frame)),
-            equipped_table=self._render_items_table(
-                state.inventory,
-                empty_text="No equipment equipped.",
-                only_equipped=True,
-                allow_actions=False,
-            ),
-            inventory_table=self._render_items_table(
-                state.inventory,
-                empty_text="Inventory is empty.",
-                only_equipped=False,
-                allow_actions=True,
-            ),
-            log_html=self._render_log(state.activity_log),
-            specialization_options=self._render_specialization_options(c.specialization),
-            state=html.escape(json.dumps(state.to_dict(), ensure_ascii=False, indent=2)),
-        )
+        inventory = self._serialize_inventory(state)
+        equipment = self._build_equipment(state, inventory)
+        materials = self._material_count(state)
+        blueprints = [item for item in inventory if item["type"] == ItemType.RECIPE.value]
+        known_recipes = self._build_known_recipes(state, materials)
+        return {
+            "hero": {
+                "name": c.name,
+                "title": c.title,
+                "specialization": c.specialization,
+                "activity": c.current_activity,
+                "summary": self._hero_summary(state),
+                "level": c.level,
+                "experience": c.experience,
+                "gold": c.gold,
+                "supplies": c.supplies,
+                "depth": c.dungeon_depth,
+                "mood": c.mood,
+                "wins": c.wins,
+                "losses": c.losses,
+                "loss_streak": c.loss_streak,
+                "unspent_stat_points": c.unspent_stat_points,
+                "perk_points": c.perk_points,
+                "stats": {
+                    "power": c.stats.power,
+                    "vitality": c.stats.vitality,
+                    "agility": c.stats.agility,
+                    "insight": c.stats.insight,
+                    "luck": c.stats.luck,
+                },
+                "total_stats": {
+                    "power": total_stats.power,
+                    "vitality": total_stats.vitality,
+                    "agility": total_stats.agility,
+                    "insight": total_stats.insight,
+                    "luck": total_stats.luck,
+                },
+                "hero_power": self.engine.hero_power(state),
+                "awaiting_player": c.awaiting_player,
+                "awaiting_text": c.awaiting_reason or "Autonomous",
+                "bosses_defeated": c.bosses_defeated,
+                "perks": [
+                    {
+                        "code": code,
+                        "name": PERK_DEFS.get(code, {}).get("name", code),
+                        "description": PERK_DEFS.get(code, {}).get("description", ""),
+                    }
+                    for code in c.perks
+                ],
+            },
+            "world": {
+                "region": state.world.current_region,
+                "threat": state.world.current_threat,
+                "danger_rating": state.world.danger_rating,
+                "biome_tier": state.world.biome_tier,
+                "boss_active": state.world.boss_active,
+                "boss_status": self._boss_status(state),
+                "last_event": state.world.last_event,
+            },
+            "device": {
+                "battery_percent": state.device.battery_percent,
+                "battery_detail": self._format_battery_detail(state),
+                "battery_text": self._format_battery_text(state),
+                "low_power_mode": state.device.low_power_mode,
+            },
+            "inventory_summary": {
+                "count": len(inventory),
+                "equipped_count": sum(1 for item in inventory if item["equipped"]),
+                "materials": materials,
+                "blueprints": len(blueprints),
+            },
+            "inventory": inventory,
+            "equipment": equipment,
+            "passives": self.engine.passive_effects(state),
+            "recipes": {
+                "known": known_recipes,
+                "blueprints": blueprints,
+            },
+            "perks": {
+                "learned": [
+                    {
+                        "code": code,
+                        "name": PERK_DEFS.get(code, {}).get("name", code),
+                        "description": PERK_DEFS.get(code, {}).get("description", ""),
+                    }
+                    for code in c.perks
+                ],
+                "available": self.engine.available_perks(state),
+            },
+            "activity_log": list(reversed(state.activity_log[-8:])),
+            "screen_preview": self.renderer.render_to_text(frame),
+            "specializations": [spec.value for spec in Specialization],
+            "next_steps": self._build_next_steps(state, equipment, blueprints, known_recipes),
+            "raw_state": state.to_dict(),
+        }
 
-    def _render_items_table(
-        self,
-        items: list[Item],
-        empty_text: str,
-        only_equipped: bool,
-        allow_actions: bool,
-    ) -> str:
-        visible_items = [
-            (index, item) for index, item in enumerate(items) if (item.equipped if only_equipped else True)
-        ]
-        if not visible_items:
-            return f"<p>{html.escape(empty_text)}</p>"
-        rows = []
-        for index, item in visible_items:
-            affixes = ", ".join(item.affixes) if item.affixes else "-"
-            action = "-"
-            if allow_actions and item.slot in {
-                EquipmentSlot.MAIN_HAND.value,
-                EquipmentSlot.BODY.value,
-                EquipmentSlot.CHARM.value,
-            }:
-                action = (
-                    f"<form method='post' action='/equip' class='inline-form'>"
-                    f"<input type='hidden' name='index' value='{index}' />"
-                    f"<button type='submit'>Equip</button></form>"
-                )
-            elif allow_actions and item.item_type == ItemType.RECIPE.value:
-                action = (
-                    f"<form method='post' action='/learn' class='inline-form'>"
-                    f"<input type='hidden' name='index' value='{index}' />"
-                    f"<button type='submit'>Learn</button></form>"
-                )
-            rows.append(
-                "<tr>"
-                f"<td>{index}</td>"
-                f"<td>{html.escape(item.name)}</td>"
-                f"<td>{html.escape(item.item_type)}</td>"
-                f"<td>{html.escape(item.rarity)}</td>"
-                f"<td>{item.power}</td>"
-                f"<td>{item.quality}</td>"
-                f"<td>{html.escape(item.slot or '-')}</td>"
-                f"<td>{'yes' if item.equipped else 'no'}</td>"
-                f"<td>{'yes' if item.crafted else 'no'}</td>"
-                f"<td>{html.escape(affixes if item.item_type != ItemType.RECIPE.value else (item.recipe_code or '-'))}</td>"
-                f"<td>{action}</td>"
-                "</tr>"
-            )
-        return (
-            (("<form method='post' action='/autoequip'><button type='submit'>Auto Equip Best Items</button></form>") if allow_actions else "")
-            +
-            "<table><thead><tr>"
-            "<th>#</th><th>Name</th><th>Type</th><th>Rarity</th><th>Power</th><th>Q</th><th>Slot</th><th>Eq</th><th>Crafted</th><th>Affixes</th><th>Action</th>"
-            "</tr></thead><tbody>"
-            + "".join(rows)
-            + "</tbody></table>"
-        )
-
-    def _render_log(self, activity_log: list[str]) -> str:
-        recent = list(reversed(activity_log[-10:]))
-        if not recent:
-            return "<p>No recent activity.</p>"
-        entries = "".join(f"<li>{html.escape(line)}</li>" for line in recent)
-        return f"<ol>{entries}</ol>"
-
-    def _render_specialization_options(self, current_specialization: str) -> str:
-        options = []
-        for specialization in Specialization:
-            selected = " selected" if specialization.value == current_specialization else ""
-            options.append(
-                f"<option value='{html.escape(specialization.value)}'{selected}>{html.escape(specialization.value)}</option>"
-            )
-        return "".join(options)
-
-    def _render_passives(self, passives: list[str]) -> str:
-        if not passives:
-            return "<p>No specialization passives.</p>"
-        entries = "".join(f"<li>{html.escape(line)}</li>" for line in passives)
-        return f"<ul>{entries}</ul>"
-
-    def _render_recipes(self, state: SaveState) -> str:
-        known = list(state.character.known_recipes)
-        blueprint_rows = []
+    def _serialize_inventory(self, state: SaveState) -> list[dict[str, object]]:
+        best_indices = self._best_indices_by_slot(state)
+        items: list[dict[str, object]] = []
         for index, item in enumerate(state.inventory):
-            if item.item_type != ItemType.RECIPE.value:
-                continue
-            blueprint_rows.append(
-                "<tr>"
-                f"<td>{index}</td>"
-                f"<td>{html.escape(item.name)}</td>"
-                f"<td>{html.escape(item.recipe_code or '-')}</td>"
-                f"<td>{item.quantity}</td>"
-                f"<td><form method='post' action='/learn' class='inline-form'><input type='hidden' name='index' value='{index}' /><button type='submit'>Learn</button></form></td>"
-                "</tr>"
+            parts = []
+            if item.slot:
+                parts.append(self._slot_label(item.slot))
+            if item.affixes:
+                parts.append(", ".join(item.affixes))
+            if any(vars(item.stat_bonuses).values()):
+                parts.append(
+                    " ".join(
+                        f"{stat[0].upper()}+{value}"
+                        for stat, value in vars(item.stat_bonuses).items()
+                        if value
+                    )
+                )
+            if item.recipe_code:
+                recipe = RECIPE_DEFS.get(item.recipe_code)
+                if recipe:
+                    parts.append(f"Crafts {recipe['item_type']}")
+            items.append(
+                {
+                    "index": index,
+                    "name": item.name,
+                    "type": item.item_type,
+                    "rarity": item.rarity,
+                    "power": item.power,
+                    "quality": item.quality,
+                    "level": item.level,
+                    "slot": item.slot,
+                    "slot_label": self._slot_label(item.slot),
+                    "equipped": item.equipped,
+                    "crafted": item.crafted,
+                    "quantity": item.quantity,
+                    "recipe_code": item.recipe_code,
+                    "summary": " | ".join(part for part in parts if part) or "No extra modifiers.",
+                    "score": self._item_score(item) if item.slot else 0,
+                    "recommended": bool(item.slot and best_indices.get(item.slot) == index and not item.equipped),
+                    "can_equip": item.slot in {
+                        EquipmentSlot.MAIN_HAND.value,
+                        EquipmentSlot.BODY.value,
+                        EquipmentSlot.CHARM.value,
+                    },
+                    "can_learn": item.item_type == ItemType.RECIPE.value and bool(item.recipe_code),
+                }
             )
-        known_rows = []
-        for recipe_code in known:
-            known_rows.append(
-                "<tr>"
-                f"<td>{html.escape(recipe_code)}</td>"
-                f"<td><form method='post' action='/craft' class='inline-form'><input type='hidden' name='recipe_code' value='{html.escape(recipe_code)}' /><button type='submit'>Craft</button></form></td>"
-                "</tr>"
-            )
-        blueprints_html = (
-            "<table><thead><tr><th>#</th><th>Blueprint</th><th>Code</th><th>Qty</th><th>Action</th></tr></thead><tbody>"
-            + "".join(blueprint_rows)
-            + "</tbody></table>"
-            if blueprint_rows
-            else "<p>No unlearned blueprints in inventory.</p>"
-        )
-        known_html = (
-            "<table><thead><tr><th>Known Recipe</th><th>Action</th></tr></thead><tbody>"
-            + "".join(known_rows)
-            + "</tbody></table>"
-            if known_rows
-            else "<p>No known recipes yet.</p>"
-        )
-        return f"<h3>Known</h3>{known_html}<h3>Blueprint Drops</h3>{blueprints_html}"
+        return items
 
-    def _render_perks(self, state: SaveState) -> str:
-        learned = (
-            "<ul>" + "".join(f"<li>{html.escape(code)}</li>" for code in state.character.perks) + "</ul>"
-            if state.character.perks
-            else "<p>No perks learned yet.</p>"
-        )
-        options = self.engine.available_perks(state)
-        available = (
-            "<table><thead><tr><th>Perk</th><th>Description</th><th>Action</th></tr></thead><tbody>"
-            + "".join(
-                "<tr>"
-                f"<td>{html.escape(option['name'])}</td>"
-                f"<td>{html.escape(option['description'])}</td>"
-                f"<td><form method='post' action='/perk' class='inline-form'><input type='hidden' name='perk_code' value='{html.escape(option['code'])}' /><button type='submit'>Learn</button></form></td>"
-                "</tr>"
-                for option in options
+    def _build_equipment(self, state: SaveState, inventory: list[dict[str, object]]) -> list[dict[str, object]]:
+        equipped_by_slot = {slot.value: None for slot in EquipmentSlot}
+        for item in inventory:
+            if item["equipped"] and item["slot"]:
+                equipped_by_slot[str(item["slot"])] = item
+        best_indices = self._best_indices_by_slot(state)
+        by_index = {item["index"]: item for item in inventory}
+        result = []
+        for slot in EquipmentSlot:
+            current = equipped_by_slot.get(slot.value)
+            recommended = by_index.get(best_indices.get(slot.value, -1))
+            result.append(
+                {
+                    "slot": slot.value,
+                    "label": self._slot_label(slot.value),
+                    "current": current,
+                    "recommended": recommended,
+                    "has_upgrade": bool(recommended and (current is None or recommended["index"] != current["index"])),
+                }
             )
-            + "</tbody></table>"
-            if options
-            else "<p>No perk options available.</p>"
+        return result
+
+    def _build_known_recipes(self, state: SaveState, materials: int) -> list[dict[str, object]]:
+        recipes = []
+        for code in state.character.known_recipes:
+            recipe = RECIPE_DEFS.get(code)
+            if recipe is None:
+                continue
+            enough_materials = materials >= recipe["materials"]
+            enough_gold = state.character.gold >= recipe["gold"]
+            if enough_materials and enough_gold:
+                status = "Ready to craft right now."
+            else:
+                missing = []
+                if not enough_materials:
+                    missing.append(f"{recipe['materials'] - materials} materials")
+                if not enough_gold:
+                    missing.append(f"{recipe['gold'] - state.character.gold} gold")
+                status = "Missing " + ", ".join(missing) + "."
+            recipes.append(
+                {
+                    "code": code,
+                    "name": recipe["name"],
+                    "item_type": recipe["item_type"],
+                    "materials": recipe["materials"],
+                    "gold": recipe["gold"],
+                    "quality": recipe["quality"],
+                    "can_craft": enough_materials and enough_gold,
+                    "status": status,
+                }
+            )
+        return recipes
+
+    def _build_next_steps(
+        self,
+        state: SaveState,
+        equipment: list[dict[str, object]],
+        blueprints: list[dict[str, object]],
+        known_recipes: list[dict[str, object]],
+    ) -> list[dict[str, str]]:
+        steps: list[dict[str, str]] = []
+        c = state.character
+        if c.awaiting_player:
+            steps.append(
+                {
+                    "tone": "bad",
+                    "title": "Hero is waiting in camp.",
+                    "detail": c.awaiting_reason or "Resolve progression choices before sending the hero out again.",
+                }
+            )
+        if c.unspent_stat_points > 0:
+            steps.append(
+                {
+                    "tone": "warn",
+                    "title": f"{c.unspent_stat_points} stat points unspent.",
+                    "detail": "Spend them before deeper runs so the hero stops wasting progression.",
+                }
+            )
+        if c.perk_points > 0:
+            steps.append(
+                {
+                    "tone": "warn",
+                    "title": f"{c.perk_points} perk points available.",
+                    "detail": "Pick a specialization perk. These are a major part of the power curve now.",
+                }
+            )
+        if blueprints:
+            steps.append(
+                {
+                    "tone": "warn",
+                    "title": f"{len(blueprints)} blueprint drops waiting.",
+                    "detail": "Learn them first so future runs can turn into better gear.",
+                }
+            )
+        upgrades = [slot for slot in equipment if slot["has_upgrade"]]
+        if upgrades:
+            names = ", ".join(str(slot["label"]) for slot in upgrades[:3])
+            steps.append(
+                {
+                    "tone": "warn",
+                    "title": "Better gear is already in the bag.",
+                    "detail": f"Suggested upgrades exist for {names}. Equip them before pushing deeper.",
+                }
+            )
+        craft_ready = [recipe for recipe in known_recipes if recipe["can_craft"]]
+        if craft_ready:
+            steps.append(
+                {
+                    "tone": "good",
+                    "title": f"{len(craft_ready)} recipes are craftable now.",
+                    "detail": "Use crafting to break gear walls instead of waiting for random drops.",
+                }
+            )
+        if not steps:
+            steps.append(
+                {
+                    "tone": "good",
+                    "title": "Autonomy is healthy.",
+                    "detail": "No obvious blockers right now. Let the hero run or push a few manual ticks.",
+                }
+            )
+        return steps[:6]
+
+    def _best_indices_by_slot(self, state: SaveState) -> dict[str, int]:
+        best: dict[str, tuple[int, int]] = {}
+        for index, item in enumerate(state.inventory):
+            if item.slot is None:
+                continue
+            score = self._item_score(item)
+            current = best.get(item.slot)
+            if current is None or score > current[0]:
+                best[item.slot] = (score, index)
+        return {slot: index for slot, (_score, index) in best.items()}
+
+    @staticmethod
+    def _item_score(item: Item) -> int:
+        return (
+            item.power
+            + item.stat_bonuses.power
+            + item.stat_bonuses.vitality
+            + item.stat_bonuses.agility
+            + item.stat_bonuses.insight
+            + item.stat_bonuses.luck
+            + item.quality * 3
         )
-        return f"<h3>Learned</h3>{learned}<h3>Available</h3>{available}"
+
+    @staticmethod
+    def _slot_label(slot: str | None) -> str:
+        if slot == EquipmentSlot.MAIN_HAND.value:
+            return "Weapon"
+        if slot == EquipmentSlot.BODY.value:
+            return "Armor"
+        if slot == EquipmentSlot.CHARM.value:
+            return "Charm"
+        return "-"
+
+    @staticmethod
+    def _material_count(state: SaveState) -> int:
+        return sum(item.quantity for item in state.inventory if item.item_type == ItemType.MATERIAL.value)
+
+    @staticmethod
+    def _to_int(value: object, default: int) -> int:
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _clear_hold(state: SaveState) -> None:
+        state.character.awaiting_player = False
+        state.character.awaiting_reason = ""
+        state.character.loss_streak = 0
+
+    def _boss_status(self, state: SaveState) -> str:
+        if state.world.boss_active:
+            return f"{state.world.boss_name} lvl {state.world.boss_level}"
+        return f"Next boss in {state.world.boss_countdown} clears"
+
+    def _format_battery_text(self, state: SaveState) -> str:
+        if state.device.battery_percent is None:
+            return "Battery ?"
+        return f"Battery {state.device.battery_percent}%"
+
+    def _format_battery_detail(self, state: SaveState) -> str:
+        if state.device.battery_percent is None and state.device.battery_voltage is None:
+            return "No battery telemetry."
+        percent = "?" if state.device.battery_percent is None else f"{state.device.battery_percent}%"
+        voltage = "?" if state.device.battery_voltage is None else f"{state.device.battery_voltage:.2f}V"
+        charging = "charging" if state.device.charging else "not charging"
+        low = "low power" if state.device.low_power_mode else "normal"
+        return f"{percent} · {voltage} · {charging} · {low}"
+
+    def _hero_summary(self, state: SaveState) -> str:
+        c = state.character
+        parts = [
+            f"{c.specialization} at depth {c.dungeon_depth}",
+            f"mood {c.mood}",
+            f"{c.bosses_defeated} bosses defeated",
+        ]
+        if c.awaiting_player:
+            parts.append(f"waiting: {c.awaiting_reason or 'player input needed'}")
+        return " | ".join(parts)
 
     def _send_html(self, body: str) -> None:
         encoded = body.encode("utf-8")
@@ -616,9 +595,9 @@ class ManagerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def _send_json(self, payload: dict[str, object]) -> None:
+    def _send_json(self, payload: object, status: HTTPStatus = HTTPStatus.OK) -> None:
         encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
