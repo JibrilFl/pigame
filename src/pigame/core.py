@@ -31,6 +31,14 @@ CONSUMABLE_NAMES = ["Bitter Tonic", "Smoke Fruit", "Repair Gel", "Amber Tea"]
 REGION_NAMES = ["Moss Tunnels", "Ash Vault", "Static Hollows", "Moon Well", "Glass Catacomb"]
 THREAT_NAMES = ["Wandering vermin", "Apex brood", "Mirror cult", "Rift scavengers", "Bone machine"]
 BOSS_TITLES = ["Brood Tyrant", "Vault Warden", "Static Monarch", "Moon Executor", "Glass Leviathan"]
+RECIPE_DEFS = {
+    "weapon_forge": {"name": "Weapon Forge Notes", "item_type": ItemType.WEAPON.value, "materials": 4, "gold": 12, "quality": 1},
+    "armor_forge": {"name": "Armor Forge Notes", "item_type": ItemType.ARMOR.value, "materials": 4, "gold": 12, "quality": 1},
+    "charm_binding": {"name": "Charm Binding Notes", "item_type": ItemType.CHARM.value, "materials": 4, "gold": 12, "quality": 1},
+    "tempered_weapon": {"name": "Tempered Weapon Pattern", "item_type": ItemType.WEAPON.value, "materials": 6, "gold": 20, "quality": 2},
+    "bastion_armor": {"name": "Bastion Armor Pattern", "item_type": ItemType.ARMOR.value, "materials": 6, "gold": 20, "quality": 2},
+    "void_charm": {"name": "Void Charm Pattern", "item_type": ItemType.CHARM.value, "materials": 6, "gold": 20, "quality": 2},
+}
 
 PREFIXES = [
     ("Savage", Stats(power=2, vitality=0, agility=0, insight=0, luck=0)),
@@ -128,6 +136,51 @@ class GameEngine:
         self._trim_logs(state)
         return summary, loot
 
+    def learn_recipe(self, state: SaveState, index: int) -> str:
+        if not (0 <= index < len(state.inventory)):
+            return "No such recipe item."
+        item = state.inventory[index]
+        if item.item_type != ItemType.RECIPE.value or not item.recipe_code:
+            return "Selected item is not a recipe."
+        if item.recipe_code not in state.character.known_recipes:
+            state.character.known_recipes.append(item.recipe_code)
+        item.quantity -= 1
+        state.inventory = [entry for entry in state.inventory if entry.quantity > 0]
+        self._clear_waiting_if_ready(state, "learned a recipe")
+        summary = f"{state.character.name} learned recipe {item.name}."
+        state.activity_log.append(summary)
+        state.world.last_event = summary
+        return summary
+
+    def craft_recipe(self, state: SaveState, recipe_code: str) -> tuple[str, list[Item]]:
+        recipe = RECIPE_DEFS.get(recipe_code)
+        if recipe is None or recipe_code not in state.character.known_recipes:
+            return "Recipe is unknown.", []
+        if self._material_count(state) < recipe["materials"]:
+            return f"Not enough materials for {recipe['name']}.", []
+        if state.character.gold < recipe["gold"]:
+            return f"Not enough gold for {recipe['name']}.", []
+        self._spend_materials(state, recipe["materials"])
+        state.character.gold -= recipe["gold"]
+        loot = self._generate_loot(
+            state.character.level,
+            state.character.level + recipe["quality"] + 1,
+            forced_type=recipe["item_type"],
+        )
+        for item in loot:
+            item.quality = max(item.quality, recipe["quality"])
+            item.crafted = True
+            if "crafted" not in item.tags:
+                item.tags.append("crafted")
+            if recipe_code not in item.tags:
+                item.tags.append(recipe_code)
+        self._add_items(state, loot)
+        self._clear_waiting_if_ready(state, f"crafted {recipe['name']}")
+        summary = f"{state.character.name} crafted {recipe['name']}."
+        state.activity_log.append(summary)
+        state.world.last_event = summary
+        return summary, loot
+
     def total_stats(self, state: SaveState) -> Stats:
         return self._total_stats(state)
 
@@ -142,6 +195,8 @@ class GameEngine:
         roll = self.rng.random()
         materials = self._material_count(state)
 
+        if character.awaiting_player:
+            return ActivityType.CAMP.value
         if state.world.boss_active:
             return ActivityType.DUNGEON.value
         if character.mood < 25 or character.supplies <= 0:
@@ -171,6 +226,13 @@ class GameEngine:
 
     def _camp_action(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
+        if character.awaiting_player:
+            character.mood = min(100, character.mood + 2)
+            character.supplies += 1
+            summary = f"{character.name} stays in camp awaiting guidance: {character.awaiting_reason or 'gear review needed'}."
+            state.world.last_event = summary
+            state.activity_log.append(summary)
+            return summary, []
         gold_gain = 2 + character.level + (2 if character.specialization == Specialization.ALCHEMIST.value else 0)
         if character.specialization == Specialization.WANDERER.value:
             gold_gain += 1
@@ -189,7 +251,7 @@ class GameEngine:
         if character.specialization == Specialization.ALCHEMIST.value:
             gains += 1
         character.supplies += gains
-        character.experience += 4 + character.level
+        character.experience += 2 + character.level // 2
         character.mood = min(100, character.mood + 1)
         loot = [self._make_item("Field Ration", ItemType.CONSUMABLE.value, "common", 0, character.level, quantity=1)]
         if self.rng.random() < 0.35:
@@ -201,7 +263,7 @@ class GameEngine:
 
     def _ritual_action(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
-        bonus = 5 + character.level + (3 if character.specialization == Specialization.NECROTECH.value else 0)
+        bonus = 3 + character.level // 2 + (2 if character.specialization == Specialization.NECROTECH.value else 0)
         character.experience += bonus
         character.mood = max(5, character.mood - 1)
         if self.rng.random() < 0.25:
@@ -218,7 +280,6 @@ class GameEngine:
     def _salvage_action(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
         spare = self._weakest_spare_item(state)
-        materials = self._material_count(state)
         loot: list[Item] = []
 
         if spare is not None:
@@ -227,31 +288,11 @@ class GameEngine:
             scrap = self._make_item("Forge Scrap", ItemType.MATERIAL.value, "uncommon", 0, max(1, spare.level), quantity=max(1, yield_count))
             loot.append(scrap)
             summary = f"{character.name} dismantled {spare.name} into {scrap.quantity} Forge Scrap."
-        elif materials >= 4 and character.gold >= self._upgrade_cost(state):
-            spent_gold = self._upgrade_cost(state)
-            target = self._upgrade_target(state)
-            if target is None:
-                summary = f"{character.name} surveyed the pack but found nothing worth refining."
-            else:
-                self._spend_materials(state, 4)
-                character.gold -= spent_gold
-                self._upgrade_item(target, state)
-                summary = f"{character.name} reforged {target.name} to quality +{target.quality}."
-        elif materials >= 3:
-            self._spend_materials(state, 3)
-            crafted_type = self._preferred_craft_type(state)
-            loot = self._generate_loot(character.level, character.level + 2, forced_type=crafted_type)
-            for item in loot:
-                item.quality += 1
-                item.crafted = True
-                if "crafted" not in item.tags:
-                    item.tags.append("crafted")
-            summary = f"{character.name} assembled fresh {crafted_type} gear from salvaged parts."
         else:
-            summary = f"{character.name} found nothing worth reforging."
+            summary = f"{character.name} sorted salvage into storage and waited for a crafting plan."
 
         state.inventory = [item for item in state.inventory if item.quantity > 0]
-        state.character.experience += 4 + (2 if loot else 0)
+        state.character.experience += 2 + (1 if loot else 0)
         if character.specialization == Specialization.ALCHEMIST.value and loot:
             character.mood = min(100, character.mood + 2)
         state.world.last_event = summary
@@ -285,13 +326,15 @@ class GameEngine:
             summary, loot = self._resolve_boss_fight(state, enemy_level, score, passive_notes)
         elif score >= 0:
             character.wins += 1
-            character.experience += 10 + enemy_level * 4
+            character.loss_streak = 0
+            character.experience += 5 + enemy_level * 2
             character.gold += 4 + enemy_level * 2
             character.dungeon_depth += 1
             character.mood = min(100, character.mood + 3)
             state.world.danger_rating = min(9999, state.world.danger_rating + 1)
             state.world.biome_tier = 1 + character.dungeon_depth // 10
             loot = self._generate_loot(character.level, enemy_level)
+            loot.extend(self._roll_recipe_drop(state, enemy_level, boss=False))
             if character.specialization == Specialization.HUNTER.value and score >= 8 and self.rng.random() < 0.4:
                 loot.extend(self._generate_loot(character.level, enemy_level, forced_type=ItemType.MATERIAL.value))
                 passive_notes.append("trophy eye")
@@ -302,7 +345,8 @@ class GameEngine:
             )
         else:
             character.losses += 1
-            character.experience += 3 + enemy_level
+            character.loss_streak += 1
+            character.experience += 1 + enemy_level
             retreat_depth = 1
             mood_loss = 5
             if character.specialization == Specialization.GUARDIAN.value:
@@ -320,6 +364,8 @@ class GameEngine:
                 f"{character.name} retreated from {state.world.current_region} after a hard fight "
                 f"with a level {enemy_level} threat."
             )
+            if character.loss_streak >= 3:
+                self._set_waiting_state(state, "Repeated losses. Better gear or stat changes are needed.")
 
         note_suffix = f" Passive: {', '.join(passive_notes)}." if passive_notes else ""
         state.world.ambient_story = self._story_text(state, score, boss_fight)
@@ -340,7 +386,8 @@ class GameEngine:
         if score >= 0:
             character.wins += 1
             character.bosses_defeated += 1
-            character.experience += 20 + enemy_level * 6
+            character.loss_streak = 0
+            character.experience += 10 + enemy_level * 3
             character.gold += 12 + enemy_level * 3
             character.dungeon_depth += 2
             character.mood = min(100, character.mood + 6)
@@ -354,6 +401,7 @@ class GameEngine:
                     forced_type=self._preferred_craft_type(state),
                 )
             )
+            loot.extend(self._roll_recipe_drop(state, enemy_level, boss=True))
             for item in loot:
                 if item.slot is not None:
                     item.quality += 1
@@ -364,7 +412,8 @@ class GameEngine:
             self._clear_boss(state, won=True)
         else:
             character.losses += 1
-            character.experience += 6 + enemy_level
+            character.loss_streak += 1
+            character.experience += 2 + enemy_level
             character.mood = max(5, character.mood - 6)
             if character.specialization == Specialization.GUARDIAN.value and score >= -5:
                 character.dungeon_depth = max(1, character.dungeon_depth - 1)
@@ -379,6 +428,7 @@ class GameEngine:
                 summary = f"{character.name} was driven back by boss {boss_name}."
             state.world.boss_level = max(1, state.world.boss_level - 1)
             state.world.current_threat = boss_name
+            self._set_waiting_state(state, "Boss pressure is too high. Manual prep is required.")
         return summary, loot
 
     def _hero_power(self, state: SaveState) -> int:
@@ -476,6 +526,7 @@ class GameEngine:
                     ItemType.MATERIAL.value,
                 ]
             )
+            recipe_code = ""
             level = max(1, (hero_level + enemy_level) // 2)
             power = max(0, level + bonus + self.rng.randint(0, 3))
             affixes, stat_bonuses, named = self._roll_affixes(item_type, rarity)
@@ -489,6 +540,12 @@ class GameEngine:
                 name = self.rng.choice(CHARM_NAMES)
             elif item_type == ItemType.CONSUMABLE.value:
                 name = self.rng.choice(CONSUMABLE_NAMES)
+                power = 0
+                quality = 0
+            elif item_type == ItemType.RECIPE.value:
+                recipe_code = self.rng.choice(list(RECIPE_DEFS))
+                recipe = RECIPE_DEFS[recipe_code]
+                name = f"Blueprint: {recipe['name']}"
                 power = 0
                 quality = 0
             else:
@@ -507,6 +564,7 @@ class GameEngine:
                     affixes=affixes,
                     stat_bonuses=stat_bonuses,
                     quality=quality,
+                    recipe_code=recipe_code if item_type == ItemType.RECIPE.value else "",
                 )
             )
         return loot
@@ -525,6 +583,7 @@ class GameEngine:
         quantity: int = 1,
         crafted: bool = False,
         tags: list[str] | None = None,
+        recipe_code: str = "",
     ) -> Item:
         return Item(
             name=name,
@@ -540,6 +599,7 @@ class GameEngine:
             quality=quality,
             crafted=crafted,
             tags=tags or [],
+            recipe_code=recipe_code,
         )
 
     def _roll_affixes(self, item_type: str, rarity: str) -> tuple[list[str], Stats, str]:
@@ -598,11 +658,26 @@ class GameEngine:
             current = self._equipped_in_slot(state, item.slot)
             current_score = self._gear_score(current) if current else -1
             candidate_score = self._gear_score(item)
-            if candidate_score > current_score:
+            if self._should_auto_equip(state, item, current_score, candidate_score):
                 if current is not None:
                     current.equipped = False
                 item.equipped = True
                 state.activity_log.append(f"{state.character.name} equipped {item.name}.")
+
+    def _should_auto_equip(self, state: SaveState, item: Item, current_score: int, candidate_score: int) -> bool:
+        if candidate_score <= current_score:
+            return False
+        if state.character.awaiting_player:
+            return False
+        if state.character.level < 4:
+            return True
+        if current_score < 0:
+            return True
+        if item.rarity in {"epic", "mythic"}:
+            return False
+        if item.quality > 0:
+            return False
+        return candidate_score - current_score >= 4
 
     def _equipped_in_slot(self, state: SaveState, slot: str) -> Item | None:
         for item in state.inventory:
@@ -655,7 +730,7 @@ class GameEngine:
 
     def _apply_leveling(self, state: SaveState) -> bool:
         character = state.character
-        threshold = 20 + character.level * 15
+        threshold = 30 + character.level * 20
         leveled_up = False
         while character.experience >= threshold:
             character.experience -= threshold
@@ -672,7 +747,7 @@ class GameEngine:
             character.unspent_stat_points += 1
             character.title = self._title_for_level(character.level)
             leveled_up = True
-            threshold = 20 + character.level * 15
+            threshold = 30 + character.level * 20
         if leveled_up:
             self._maybe_unlock_specialization(state)
         return leveled_up
@@ -707,10 +782,16 @@ class GameEngine:
         pressure = state.world.danger_rating - character.level
         if state.device.low_power_mode:
             return "Battery is low. Favor rest, camp actions, and minimal risk."
+        if character.awaiting_player:
+            return f"Waiting for player input: {character.awaiting_reason or 'manual intervention required'}"
         if state.world.boss_active:
             return f"Boss active: {state.world.boss_name}. Forge gear or prepare for a forced dungeon push."
         if pressure >= 8:
             return "Threat is outpacing growth. Focus on recovery, forging, and gear quality."
+        if character.unspent_stat_points > 0:
+            return "Unspent stat points are available. Growth is stalling until they are assigned."
+        if self._unknown_recipe_count(state) > 0:
+            return "Blueprints are waiting in inventory. Learn and craft them from the manager."
         if character.supplies <= 1:
             return "Supplies are low. The creature should favor camp actions soon."
         if character.specialization == Specialization.WANDERER.value and character.level >= 5:
@@ -777,11 +858,11 @@ class GameEngine:
         for item in state.inventory:
             if item.quantity <= 0:
                 continue
-            stackable = item.item_type in {ItemType.CONSUMABLE.value, ItemType.MATERIAL.value}
+            stackable = item.item_type in {ItemType.CONSUMABLE.value, ItemType.MATERIAL.value, ItemType.RECIPE.value}
             if not stackable:
                 merged.append(item)
                 continue
-            key = (item.name, item.item_type, item.rarity, item.level)
+            key = (item.name, item.item_type, item.rarity, item.level, item.recipe_code)
             current = stacks.get(key)
             if current is None:
                 stacks[key] = item
@@ -792,7 +873,7 @@ class GameEngine:
 
     def _add_items(self, state: SaveState, items: list[Item]) -> None:
         for item in items:
-            if item.item_type in {ItemType.CONSUMABLE.value, ItemType.MATERIAL.value}:
+            if item.item_type in {ItemType.CONSUMABLE.value, ItemType.MATERIAL.value, ItemType.RECIPE.value}:
                 existing = next(
                     (
                         entry
@@ -801,6 +882,7 @@ class GameEngine:
                         and entry.item_type == item.item_type
                         and entry.rarity == item.rarity
                         and entry.level == item.level
+                        and entry.recipe_code == item.recipe_code
                     ),
                     None,
                 )
@@ -878,3 +960,54 @@ class GameEngine:
 
     def _rarity_bonus(self, rarity: str) -> int:
         return next((bonus for name, bonus in RARITY_TABLE if name == rarity), 0)
+
+    def _set_waiting_state(self, state: SaveState, reason: str) -> None:
+        state.character.awaiting_player = True
+        state.character.awaiting_reason = reason
+        state.world.boss_active = False
+        state.world.boss_name = ""
+        state.world.boss_level = 0
+        state.world.boss_countdown = max(state.world.boss_countdown, 2)
+
+    def _clear_waiting_if_ready(self, state: SaveState, reason: str) -> None:
+        state.character.awaiting_player = False
+        state.character.awaiting_reason = ""
+        state.character.loss_streak = 0
+        state.activity_log.append(f"{state.character.name} is ready again after player action: {reason}.")
+
+    def _unknown_recipe_count(self, state: SaveState) -> int:
+        return len(
+            [
+                item
+                for item in state.inventory
+                if item.item_type == ItemType.RECIPE.value
+                and item.recipe_code
+                and item.recipe_code not in state.character.known_recipes
+            ]
+        )
+
+    def _roll_recipe_drop(self, state: SaveState, enemy_level: int, boss: bool) -> list[Item]:
+        chance = 0.08 + (0.20 if boss else 0.0)
+        if self.rng.random() >= chance:
+            return []
+        pool = [
+            code
+            for code, recipe in RECIPE_DEFS.items()
+            if recipe["quality"] <= (2 if enemy_level >= 8 else 1)
+            and code not in state.character.known_recipes
+        ]
+        if not pool:
+            return []
+        recipe_code = self.rng.choice(pool)
+        recipe = RECIPE_DEFS[recipe_code]
+        return [
+            self._make_item(
+                name=f"Blueprint: {recipe['name']}",
+                item_type=ItemType.RECIPE.value,
+                rarity="rare" if recipe["quality"] > 1 else "uncommon",
+                power=0,
+                level=max(1, enemy_level),
+                quantity=1,
+                recipe_code=recipe_code,
+            )
+        ]

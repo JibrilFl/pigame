@@ -68,6 +68,7 @@ class TextRenderer:
                         else f"Boss in {state.world.boss_countdown} clears"
                     ),
                     f"XP {c.experience}  Gold {c.gold}  Pts {c.unspent_stat_points}",
+                    f"LossStreak {c.loss_streak}  Wait {c.awaiting_player}",
                     battery_line,
                     f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
                     f"AI: {engine.ai_brief(state)}",
@@ -115,7 +116,9 @@ class TextRenderer:
             lines.append(f"{label}: {item.name} +{item.power} q{item.quality}{crafted}{affix}")
         consumables = sum(item.quantity for item in state.inventory if item.item_type == "consumable")
         materials = sum(item.quantity for item in state.inventory if item.item_type == "material")
+        blueprints = sum(item.quantity for item in state.inventory if item.item_type == "recipe")
         lines.append(f"Consumables {consumables}  Materials {materials}")
+        lines.append(f"Blueprints {blueprints}  Known recipes {len(state.character.known_recipes)}")
         passives = engine.passive_effects(state)
         if passives:
             lines.extend([f"Passive: {text}" for text in passives[:2]])

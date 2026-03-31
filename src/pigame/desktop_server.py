@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .core import GameEngine
 from .device import TextRenderer
-from .models import EquipmentSlot, Item, SaveState, Specialization, zero_stats
+from .models import EquipmentSlot, Item, ItemType, SaveState, Specialization, zero_stats
 from .storage import DEFAULT_SAVE_PATH, auto_equip_inventory, infer_slot, load_save, save_state
 
 
@@ -68,6 +68,7 @@ HTML = """<!doctype html>
             <div class="metric"><strong>Power {power}</strong>Vitality {vitality}</div>
             <div class="metric"><strong>Agility {agility}</strong>Insight {insight}</div>
             <div class="metric"><strong>Luck {luck}</strong>Wins {wins} / Losses {losses}</div>
+            <div class="metric"><strong>Loss Streak {loss_streak}</strong>{awaiting_status}</div>
             <div class="metric"><strong>Bosses {bosses_defeated}</strong>Major clears recorded</div>
             <div class="metric"><strong>Total P{total_power} V{total_vitality}</strong>Total A{total_agility} I{total_insight} L{total_luck}</div>
             <div class="metric"><strong>Hero Power {hero_power}</strong>Computed combat score base</div>
@@ -113,6 +114,11 @@ HTML = """<!doctype html>
         </div>
 
         <div class="panel">
+          <h2>Recipes</h2>
+          {recipes_html}
+        </div>
+
+        <div class="panel">
           <h2>Quick Actions</h2>
           <div class="forms">
             <form method="post" action="/grant">
@@ -124,11 +130,13 @@ HTML = """<!doctype html>
                 <option value="armor">armor</option>
                 <option value="charm">charm</option>
                 <option value="material">material</option>
+                <option value="recipe">recipe</option>
               </select>
               <input name="rarity" value="common" />
               <input name="power" value="0" />
               <input name="level" value="1" />
               <input name="quality" value="0" />
+              <input name="recipe_code" value="" placeholder="recipe_code for blueprint" />
               <button type="submit">Grant Item</button>
             </form>
 
@@ -180,6 +188,11 @@ HTML = """<!doctype html>
               <h3>Forge / Salvage</h3>
               <button type="submit">Run Crafting Step</button>
             </form>
+
+            <form method="post" action="/resume">
+              <h3>Release From Camp</h3>
+              <button type="submit">Resume Autonomous Runs</button>
+            </form>
           </div>
         </div>
 
@@ -230,6 +243,7 @@ class ManagerHandler(BaseHTTPRequestHandler):
                 quantity=1,
                 slot=infer_slot(form.get("item_type", ["material"])[0]),
                 stat_bonuses=zero_stats(),
+                recipe_code=form.get("recipe_code", [""])[0],
             )
             state.inventory.append(item)
             state.activity_log.append(f"Manager granted item: {item.name}.")
@@ -266,6 +280,9 @@ class ManagerHandler(BaseHTTPRequestHandler):
             valid = {spec.value for spec in Specialization}
             if chosen in valid:
                 state.character.specialization = chosen
+                state.character.awaiting_player = False
+                state.character.awaiting_reason = ""
+                state.character.loss_streak = 0
                 state.activity_log.append(f"Manager set specialization to {chosen}.")
                 save_state(state, self.save_path)
             self._redirect_home()
@@ -280,6 +297,9 @@ class ManagerHandler(BaseHTTPRequestHandler):
                     getattr(state.character.stats, stat_name) + 1,
                 )
                 state.character.unspent_stat_points -= 1
+                state.character.awaiting_player = False
+                state.character.awaiting_reason = ""
+                state.character.loss_streak = 0
                 state.activity_log.append(f"Manager spent 1 stat point on {stat_name}.")
                 save_state(state, self.save_path)
             self._redirect_home()
@@ -294,6 +314,9 @@ class ManagerHandler(BaseHTTPRequestHandler):
                         if other.slot == item.slot:
                             other.equipped = False
                     item.equipped = True
+                    state.character.awaiting_player = False
+                    state.character.awaiting_reason = ""
+                    state.character.loss_streak = 0
                     state.activity_log.append(f"Manager equipped {item.name}.")
                     save_state(state, self.save_path)
             self._redirect_home()
@@ -301,6 +324,9 @@ class ManagerHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/autoequip":
             if auto_equip_inventory(state):
+                state.character.awaiting_player = False
+                state.character.awaiting_reason = ""
+                state.character.loss_streak = 0
                 state.activity_log.append("Manager triggered auto-equip.")
                 save_state(state, self.save_path)
             self._redirect_home()
@@ -318,6 +344,29 @@ class ManagerHandler(BaseHTTPRequestHandler):
         if parsed.path == "/forge":
             summary, _loot = self.engine.forge(state)
             state.activity_log.append(f"Manager triggered forge: {summary}")
+            save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
+        if parsed.path == "/learn":
+            summary = self.engine.learn_recipe(state, int(form.get("index", ["-1"])[0]))
+            state.activity_log.append(f"Manager learn action: {summary}")
+            save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
+        if parsed.path == "/craft":
+            summary, _loot = self.engine.craft_recipe(state, form.get("recipe_code", [""])[0])
+            state.activity_log.append(f"Manager craft action: {summary}")
+            save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
+        if parsed.path == "/resume":
+            state.character.awaiting_player = False
+            state.character.awaiting_reason = ""
+            state.character.loss_streak = 0
+            state.activity_log.append("Manager released hero from camp hold.")
             save_state(state, self.save_path)
             self._redirect_home()
             return
@@ -342,6 +391,11 @@ class ManagerHandler(BaseHTTPRequestHandler):
             if state.world.boss_active
             else f"idle, next in {state.world.boss_countdown} clears"
         )
+        awaiting_status = (
+            f"Waiting: {state.character.awaiting_reason}"
+            if state.character.awaiting_player
+            else "Autonomous"
+        )
         return HTML.format(
             name=html.escape(c.name),
             title=html.escape(c.title),
@@ -359,6 +413,8 @@ class ManagerHandler(BaseHTTPRequestHandler):
             agility=c.stats.agility,
             insight=c.stats.insight,
             luck=c.stats.luck,
+            loss_streak=c.loss_streak,
+            awaiting_status=html.escape(awaiting_status),
             bosses_defeated=c.bosses_defeated,
             total_power=total_stats.power,
             total_vitality=total_stats.vitality,
@@ -376,6 +432,7 @@ class ManagerHandler(BaseHTTPRequestHandler):
             battery=html.escape(battery),
             last_event=html.escape(state.world.last_event),
             passives_html=self._render_passives(self.engine.passive_effects(state)),
+            recipes_html=self._render_recipes(state),
             screen=html.escape(self.renderer.render_to_text(frame)),
             equipped_table=self._render_items_table(
                 state.inventory,
@@ -420,6 +477,12 @@ class ManagerHandler(BaseHTTPRequestHandler):
                     f"<input type='hidden' name='index' value='{index}' />"
                     f"<button type='submit'>Equip</button></form>"
                 )
+            elif allow_actions and item.item_type == ItemType.RECIPE.value:
+                action = (
+                    f"<form method='post' action='/learn' class='inline-form'>"
+                    f"<input type='hidden' name='index' value='{index}' />"
+                    f"<button type='submit'>Learn</button></form>"
+                )
             rows.append(
                 "<tr>"
                 f"<td>{index}</td>"
@@ -431,7 +494,7 @@ class ManagerHandler(BaseHTTPRequestHandler):
                 f"<td>{html.escape(item.slot or '-')}</td>"
                 f"<td>{'yes' if item.equipped else 'no'}</td>"
                 f"<td>{'yes' if item.crafted else 'no'}</td>"
-                f"<td>{html.escape(affixes)}</td>"
+                f"<td>{html.escape(affixes if item.item_type != ItemType.RECIPE.value else (item.recipe_code or '-'))}</td>"
                 f"<td>{action}</td>"
                 "</tr>"
             )
@@ -466,6 +529,45 @@ class ManagerHandler(BaseHTTPRequestHandler):
             return "<p>No specialization passives.</p>"
         entries = "".join(f"<li>{html.escape(line)}</li>" for line in passives)
         return f"<ul>{entries}</ul>"
+
+    def _render_recipes(self, state: SaveState) -> str:
+        known = list(state.character.known_recipes)
+        blueprint_rows = []
+        for index, item in enumerate(state.inventory):
+            if item.item_type != ItemType.RECIPE.value:
+                continue
+            blueprint_rows.append(
+                "<tr>"
+                f"<td>{index}</td>"
+                f"<td>{html.escape(item.name)}</td>"
+                f"<td>{html.escape(item.recipe_code or '-')}</td>"
+                f"<td>{item.quantity}</td>"
+                f"<td><form method='post' action='/learn' class='inline-form'><input type='hidden' name='index' value='{index}' /><button type='submit'>Learn</button></form></td>"
+                "</tr>"
+            )
+        known_rows = []
+        for recipe_code in known:
+            known_rows.append(
+                "<tr>"
+                f"<td>{html.escape(recipe_code)}</td>"
+                f"<td><form method='post' action='/craft' class='inline-form'><input type='hidden' name='recipe_code' value='{html.escape(recipe_code)}' /><button type='submit'>Craft</button></form></td>"
+                "</tr>"
+            )
+        blueprints_html = (
+            "<table><thead><tr><th>#</th><th>Blueprint</th><th>Code</th><th>Qty</th><th>Action</th></tr></thead><tbody>"
+            + "".join(blueprint_rows)
+            + "</tbody></table>"
+            if blueprint_rows
+            else "<p>No unlearned blueprints in inventory.</p>"
+        )
+        known_html = (
+            "<table><thead><tr><th>Known Recipe</th><th>Action</th></tr></thead><tbody>"
+            + "".join(known_rows)
+            + "</tbody></table>"
+            if known_rows
+            else "<p>No known recipes yet.</p>"
+        )
+        return f"<h3>Known</h3>{known_html}<h3>Blueprint Drops</h3>{blueprints_html}"
 
     def _send_html(self, body: str) -> None:
         encoded = body.encode("utf-8")

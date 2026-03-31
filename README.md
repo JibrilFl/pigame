@@ -28,6 +28,8 @@ Ubuntu can be supported later, but first implementation should target Raspberry 
 - role specialization unlocks with passive combat identities
 - boss encounters tied to dungeon progression
 - deeper equipment progression with item quality, salvage, and forging
+- blueprint drops, learned recipes, and manual crafting control
+- camp hold after repeated failures or boss pressure until player intervention
 - placeholder "mini AI" flavor summaries
 - text renderer abstraction for the future e-ink screen
 - autonomous runtime loop for Raspberry Pi
@@ -54,6 +56,7 @@ The desktop manager also exposes:
 - manual specialization changes and stat spending
 - direct equip controls and auto-equip
 - one-click forge/salvage actions for testing item progression
+- blueprint learning, recipe crafting, and release from camp hold
 
 ## Install
 

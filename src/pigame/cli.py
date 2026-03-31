@@ -64,7 +64,8 @@ def main(argv: list[str] | None = None) -> int:
             print(result.summary)
             for item in result.loot:
                 crafted = " crafted" if item.crafted else ""
-                print(f"  loot: {item.rarity} {item.name} ({item.item_type}) q{item.quality}{crafted}")
+                recipe = f" recipe={item.recipe_code}" if item.recipe_code else ""
+                print(f"  loot: {item.rarity} {item.name} ({item.item_type}) q{item.quality}{crafted}{recipe}")
             if result.leveled_up:
                 print(f"  level up -> {state.character.level}")
         save_state(state, args.save)

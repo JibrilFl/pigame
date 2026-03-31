@@ -61,6 +61,12 @@ def migrate_save(state: SaveState) -> bool:
     if state.character.bosses_defeated < 0:
         state.character.bosses_defeated = 0
         changed = True
+    if state.character.loss_streak < 0:
+        state.character.loss_streak = 0
+        changed = True
+    if state.character.known_recipes is None:
+        state.character.known_recipes = []
+        changed = True
     if not state.world.current_region:
         state.world.current_region = infer_region(state.character.dungeon_depth)
         changed = True
@@ -94,6 +100,9 @@ def migrate_save(state: SaveState) -> bool:
             changed = True
         if item.tags is None:
             item.tags = []
+            changed = True
+        if item.recipe_code is None:
+            item.recipe_code = ""
             changed = True
 
     if auto_equip_inventory(state):

@@ -19,6 +19,7 @@ class ItemType(str, Enum):
     CHARM = "charm"
     CONSUMABLE = "consumable"
     MATERIAL = "material"
+    RECIPE = "recipe"
 
 
 class EquipmentSlot(str, Enum):
@@ -64,6 +65,7 @@ class Item:
     quality: int = 0
     crafted: bool = False
     tags: list[str] = field(default_factory=list)
+    recipe_code: str = ""
 
 
 @dataclass
@@ -84,6 +86,10 @@ class Character:
     title: str = "Hatchling Delver"
     unspent_stat_points: int = 0
     bosses_defeated: int = 0
+    loss_streak: int = 0
+    awaiting_player: bool = False
+    awaiting_reason: str = ""
+    known_recipes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -152,6 +158,10 @@ class SaveState:
             title=character_data.get("title", "Hatchling Delver"),
             unspent_stat_points=character_data.get("unspent_stat_points", 0),
             bosses_defeated=character_data.get("bosses_defeated", 0),
+            loss_streak=character_data.get("loss_streak", 0),
+            awaiting_player=character_data.get("awaiting_player", False),
+            awaiting_reason=character_data.get("awaiting_reason", ""),
+            known_recipes=list(character_data.get("known_recipes", [])),
         )
 
         inventory = []
