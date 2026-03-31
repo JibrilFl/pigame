@@ -65,6 +65,7 @@ HTML = """<!doctype html>
             <div class="metric"><strong>Gold {gold}</strong>Supplies {supplies}</div>
             <div class="metric"><strong>Depth {depth}</strong>Mood {mood}</div>
             <div class="metric"><strong>Free Points {free_points}</strong>Manual stat allocation</div>
+            <div class="metric"><strong>Perk Points {perk_points}</strong>{perks_count} perks learned</div>
             <div class="metric"><strong>Power {power}</strong>Vitality {vitality}</div>
             <div class="metric"><strong>Agility {agility}</strong>Insight {insight}</div>
             <div class="metric"><strong>Luck {luck}</strong>Wins {wins} / Losses {losses}</div>
@@ -116,6 +117,11 @@ HTML = """<!doctype html>
         <div class="panel">
           <h2>Recipes</h2>
           {recipes_html}
+        </div>
+
+        <div class="panel">
+          <h2>Perks</h2>
+          {perks_html}
         </div>
 
         <div class="panel">
@@ -371,6 +377,13 @@ class ManagerHandler(BaseHTTPRequestHandler):
             self._redirect_home()
             return
 
+        if parsed.path == "/perk":
+            summary = self.engine.choose_perk(state, form.get("perk_code", [""])[0])
+            state.activity_log.append(f"Manager perk action: {summary}")
+            save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
@@ -408,6 +421,8 @@ class ManagerHandler(BaseHTTPRequestHandler):
             depth=c.dungeon_depth,
             mood=c.mood,
             free_points=c.unspent_stat_points,
+            perk_points=c.perk_points,
+            perks_count=len(c.perks),
             power=c.stats.power,
             vitality=c.stats.vitality,
             agility=c.stats.agility,
@@ -433,6 +448,7 @@ class ManagerHandler(BaseHTTPRequestHandler):
             last_event=html.escape(state.world.last_event),
             passives_html=self._render_passives(self.engine.passive_effects(state)),
             recipes_html=self._render_recipes(state),
+            perks_html=self._render_perks(state),
             screen=html.escape(self.renderer.render_to_text(frame)),
             equipped_table=self._render_items_table(
                 state.inventory,
@@ -568,6 +584,29 @@ class ManagerHandler(BaseHTTPRequestHandler):
             else "<p>No known recipes yet.</p>"
         )
         return f"<h3>Known</h3>{known_html}<h3>Blueprint Drops</h3>{blueprints_html}"
+
+    def _render_perks(self, state: SaveState) -> str:
+        learned = (
+            "<ul>" + "".join(f"<li>{html.escape(code)}</li>" for code in state.character.perks) + "</ul>"
+            if state.character.perks
+            else "<p>No perks learned yet.</p>"
+        )
+        options = self.engine.available_perks(state)
+        available = (
+            "<table><thead><tr><th>Perk</th><th>Description</th><th>Action</th></tr></thead><tbody>"
+            + "".join(
+                "<tr>"
+                f"<td>{html.escape(option['name'])}</td>"
+                f"<td>{html.escape(option['description'])}</td>"
+                f"<td><form method='post' action='/perk' class='inline-form'><input type='hidden' name='perk_code' value='{html.escape(option['code'])}' /><button type='submit'>Learn</button></form></td>"
+                "</tr>"
+                for option in options
+            )
+            + "</tbody></table>"
+            if options
+            else "<p>No perk options available.</p>"
+        )
+        return f"<h3>Learned</h3>{learned}<h3>Available</h3>{available}"
 
     def _send_html(self, body: str) -> None:
         encoded = body.encode("utf-8")

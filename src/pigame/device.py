@@ -68,6 +68,7 @@ class TextRenderer:
                         else f"Boss in {state.world.boss_countdown} clears"
                     ),
                     f"XP {c.experience}  Gold {c.gold}  Pts {c.unspent_stat_points}",
+                    f"PerkPts {c.perk_points}  Perks {len(c.perks)}",
                     f"LossStreak {c.loss_streak}  Wait {c.awaiting_player}",
                     battery_line,
                     f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",

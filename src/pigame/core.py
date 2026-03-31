@@ -87,6 +87,59 @@ SPECIALIZATION_PASSIVES = {
     ],
 }
 
+PERK_DEFS = {
+    "guardian_bastion": {
+        "name": "Bastion Frame",
+        "specialization": Specialization.GUARDIAN.value,
+        "description": "Boss prep score improves from armor quality and vitality.",
+    },
+    "guardian_second_wind": {
+        "name": "Second Wind",
+        "specialization": Specialization.GUARDIAN.value,
+        "description": "Camp recovery and loss recovery improve.",
+    },
+    "hunter_mark": {
+        "name": "Marked Quarry",
+        "specialization": Specialization.HUNTER.value,
+        "description": "Boss and elite fights gain extra precision damage.",
+    },
+    "hunter_scavenger": {
+        "name": "Scavenger Step",
+        "specialization": Specialization.HUNTER.value,
+        "description": "Recipe and material drops improve.",
+    },
+    "alchemist_catalyst": {
+        "name": "Catalyst Vials",
+        "specialization": Specialization.ALCHEMIST.value,
+        "description": "Crafting yields stronger quality floors.",
+    },
+    "alchemist_field_lab": {
+        "name": "Field Lab",
+        "specialization": Specialization.ALCHEMIST.value,
+        "description": "Camp and hunt actions produce more supplies and gold.",
+    },
+    "necrotech_overclock": {
+        "name": "Soul Overclock",
+        "specialization": Specialization.NECROTECH.value,
+        "description": "Charm power and boss pressure swings harder in your favor.",
+    },
+    "necrotech_reclaimer": {
+        "name": "Reclaimer Rites",
+        "specialization": Specialization.NECROTECH.value,
+        "description": "Salvage and blueprint recovery improve.",
+    },
+    "wanderer_adapt": {
+        "name": "Adaptive Route",
+        "specialization": Specialization.WANDERER.value,
+        "description": "Earlier game auto-recovery and broader loot smoothing.",
+    },
+    "wanderer_instinct": {
+        "name": "Instinct Cache",
+        "specialization": Specialization.WANDERER.value,
+        "description": "Gain more value from unexplored recipes and early boss prep.",
+    },
+}
+
 
 @dataclass
 class TickResult:
@@ -144,6 +197,8 @@ class GameEngine:
             return "Selected item is not a recipe."
         if item.recipe_code not in state.character.known_recipes:
             state.character.known_recipes.append(item.recipe_code)
+        if "wanderer_instinct" in state.character.perks:
+            state.character.gold += 3
         item.quantity -= 1
         state.inventory = [entry for entry in state.inventory if entry.quantity > 0]
         self._clear_waiting_if_ready(state, "learned a recipe")
@@ -167,8 +222,13 @@ class GameEngine:
             state.character.level + recipe["quality"] + 1,
             forced_type=recipe["item_type"],
         )
+        perk_quality_bonus = 0
+        if "alchemist_catalyst" in state.character.perks:
+            perk_quality_bonus += 1
+        if "wanderer_instinct" in state.character.perks:
+            perk_quality_bonus += 1
         for item in loot:
-            item.quality = max(item.quality, recipe["quality"])
+            item.quality = max(item.quality, recipe["quality"] + perk_quality_bonus)
             item.crafted = True
             if "crafted" not in item.tags:
                 item.tags.append("crafted")
@@ -189,6 +249,33 @@ class GameEngine:
 
     def passive_effects(self, state: SaveState) -> list[str]:
         return SPECIALIZATION_PASSIVES.get(state.character.specialization, [])
+
+    def available_perks(self, state: SaveState) -> list[dict[str, str]]:
+        chosen = set(state.character.perks)
+        specialization = state.character.specialization
+        return [
+            {"code": code, "name": data["name"], "description": data["description"]}
+            for code, data in PERK_DEFS.items()
+            if data["specialization"] == specialization and code not in chosen
+        ]
+
+    def choose_perk(self, state: SaveState, perk_code: str) -> str:
+        if state.character.perk_points <= 0:
+            return "No perk points available."
+        perk = PERK_DEFS.get(perk_code)
+        if perk is None:
+            return "Unknown perk."
+        if perk["specialization"] != state.character.specialization:
+            return "Perk does not match current specialization."
+        if perk_code in state.character.perks:
+            return "Perk already chosen."
+        state.character.perks.append(perk_code)
+        state.character.perk_points -= 1
+        self._clear_waiting_if_ready(state, f"selected perk {perk['name']}")
+        summary = f"{state.character.name} learned perk {perk['name']}."
+        state.activity_log.append(summary)
+        state.world.last_event = summary
+        return summary
 
     def _choose_activity(self, state: SaveState) -> str:
         character = state.character
@@ -234,9 +321,16 @@ class GameEngine:
             state.activity_log.append(summary)
             return summary, []
         gold_gain = 2 + character.level + (2 if character.specialization == Specialization.ALCHEMIST.value else 0)
+        if "alchemist_field_lab" in character.perks:
+            gold_gain += 2
         if character.specialization == Specialization.WANDERER.value:
             gold_gain += 1
-        character.supplies += 1 + (1 if character.specialization == Specialization.ALCHEMIST.value else 0)
+        supplies_gain = 1 + (1 if character.specialization == Specialization.ALCHEMIST.value else 0)
+        if "guardian_second_wind" in character.perks:
+            supplies_gain += 1
+        if "alchemist_field_lab" in character.perks:
+            supplies_gain += 1
+        character.supplies += supplies_gain
         character.gold += gold_gain
         character.mood = min(100, character.mood + 3)
         self._maybe_unlock_specialization(state)
@@ -249,6 +343,8 @@ class GameEngine:
         character = state.character
         gains = 2 + self.rng.randint(0, 2) + character.level // 4
         if character.specialization == Specialization.ALCHEMIST.value:
+            gains += 1
+        if "alchemist_field_lab" in character.perks:
             gains += 1
         character.supplies += gains
         character.experience += 2 + character.level // 2
@@ -302,6 +398,14 @@ class GameEngine:
     def _dungeon_run(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
         boss_fight = state.world.boss_active
+        if boss_fight:
+            prep_block = self._boss_prep_failure_reason(state)
+            if prep_block:
+                self._set_waiting_state(state, prep_block)
+                summary = f"{character.name} refused the boss push and returned to camp for preparation."
+                state.world.last_event = summary
+                state.activity_log.append(summary)
+                return summary, []
         enemy_level = max(1, character.level + character.dungeon_depth // 3)
         if boss_fight:
             enemy_level = max(enemy_level + 2, state.world.boss_level)
@@ -314,6 +418,8 @@ class GameEngine:
         variance = self.rng.randint(-6, 6)
         if character.specialization == Specialization.HUNTER.value:
             variance += self.rng.randint(0, max(2, self._total_stats(state).agility // 4))
+        if "hunter_mark" in character.perks and (boss_fight or enemy_level >= character.level + 2):
+            variance += 3
         score = hero_power + passive_bonus + variance - enemy_power
 
         supply_cost = 1
@@ -489,10 +595,14 @@ class GameEngine:
             bonus += (armor.quality * 3) if armor is not None else 0
             if boss_fight:
                 bonus += 6
+            if "guardian_bastion" in character.perks and armor is not None:
+                bonus += 4 + armor.quality * 2
             notes.append("bulwark")
         elif character.specialization == Specialization.HUNTER.value:
             bonus += total.agility // 2 + total.luck // 3
             if boss_fight:
+                bonus += 3
+            if "hunter_mark" in character.perks:
                 bonus += 3
             notes.append("ambush")
         elif character.specialization == Specialization.ALCHEMIST.value:
@@ -502,12 +612,16 @@ class GameEngine:
                 notes.append("reagents")
             if character.supplies <= 2:
                 bonus += 2
+            if "alchemist_catalyst" in character.perks:
+                bonus += 3
         elif character.specialization == Specialization.NECROTECH.value:
             charm = self._equipped_in_slot(state, EquipmentSlot.CHARM.value)
             bonus += total.insight // 2
             bonus += (charm.quality * 3) if charm is not None else 0
             if boss_fight:
                 bonus += 5
+            if "necrotech_overclock" in character.perks and charm is not None:
+                bonus += 4 + charm.quality * 2
             notes.append("soul graft")
 
         return bonus, notes
@@ -745,6 +859,9 @@ class GameEngine:
                 character.stats.luck += 1
             character.supplies += 1
             character.unspent_stat_points += 1
+            if character.level >= 6 and character.level % 3 == 0:
+                character.perk_points += 1
+                self._set_waiting_state(state, "A new perk choice is available.")
             character.title = self._title_for_level(character.level)
             leveled_up = True
             threshold = 30 + character.level * 20
@@ -784,6 +901,8 @@ class GameEngine:
             return "Battery is low. Favor rest, camp actions, and minimal risk."
         if character.awaiting_player:
             return f"Waiting for player input: {character.awaiting_reason or 'manual intervention required'}"
+        if character.perk_points > 0:
+            return "A perk choice is ready. The hero should not push deeper until it is assigned."
         if state.world.boss_active:
             return f"Boss active: {state.world.boss_name}. Forge gear or prepare for a forced dungeon push."
         if pressure >= 8:
@@ -960,6 +1079,26 @@ class GameEngine:
 
     def _rarity_bonus(self, rarity: str) -> int:
         return next((bonus for name, bonus in RARITY_TABLE if name == rarity), 0)
+
+    def _boss_prep_failure_reason(self, state: SaveState) -> str | None:
+        character = state.character
+        if character.unspent_stat_points > 0:
+            return "Boss prep incomplete. Spend stat points first."
+        if character.perk_points > 0:
+            return "Boss prep incomplete. Choose a specialization perk first."
+        equipped = [item for item in state.inventory if item.equipped and item.slot is not None]
+        required_slots = 2 if state.world.boss_phase <= 1 else 3
+        available_slots = len({item.slot for item in state.inventory if item.slot is not None})
+        if available_slots == 0:
+            return None
+        required_slots = min(required_slots, available_slots)
+        if required_slots >= 2 and len(equipped) < required_slots:
+            return "Boss prep incomplete. Fill more gear slots."
+        quality_total = sum(item.quality for item in equipped)
+        required_quality = max(1, state.world.boss_phase - 1 + character.level // 5)
+        if quality_total < required_quality:
+            return "Boss prep incomplete. Improve gear quality or craft better equipment."
+        return None
 
     def _set_waiting_state(self, state: SaveState, reason: str) -> None:
         state.character.awaiting_player = True

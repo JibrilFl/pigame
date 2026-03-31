@@ -90,6 +90,8 @@ class Character:
     awaiting_player: bool = False
     awaiting_reason: str = ""
     known_recipes: list[str] = field(default_factory=list)
+    perk_points: int = 0
+    perks: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -162,6 +164,8 @@ class SaveState:
             awaiting_player=character_data.get("awaiting_player", False),
             awaiting_reason=character_data.get("awaiting_reason", ""),
             known_recipes=list(character_data.get("known_recipes", [])),
+            perk_points=character_data.get("perk_points", 0),
+            perks=list(character_data.get("perks", [])),
         )
 
         inventory = []

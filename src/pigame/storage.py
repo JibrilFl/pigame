@@ -67,6 +67,12 @@ def migrate_save(state: SaveState) -> bool:
     if state.character.known_recipes is None:
         state.character.known_recipes = []
         changed = True
+    if state.character.perk_points < 0:
+        state.character.perk_points = 0
+        changed = True
+    if state.character.perks is None:
+        state.character.perks = []
+        changed = True
     if not state.world.current_region:
         state.world.current_region = infer_region(state.character.dungeon_depth)
         changed = True
