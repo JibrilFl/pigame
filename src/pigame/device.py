@@ -88,7 +88,8 @@ class TextRenderer:
                     f"D{c.dungeon_depth} W{c.wins} L{c.losses}",
                     f"${c.gold} T{state.world.biome_tier} {boss_text}",
                     f"{region_text} / RISK {state.world.danger_rating}",
-                    f"{wait_text} LS{c.loss_streak} ST{c.unspent_stat_points} PK{c.perk_points}",
+                    f"{wait_text} LS{c.loss_streak}",
+                    f"ST{c.unspent_stat_points} PK{c.perk_points}",
                 ],
             ),
             RenderFrame(
@@ -378,12 +379,10 @@ class WaveshareRenderer(TextRenderer):
             self._draw_card(draw, font, x0, y0, card_w, card_h, line, icons[index % len(icons)])
         footer = frame.lines[6:8]
         if footer:
-            y0 = height - 19
+            y0 = height - 23
             draw.rectangle((5, y0, width - 6, height - 5), outline=0, fill=255)
-            summary = self._fit_text(" / ".join(footer), 40)
-            wrapped = self._wrap_text(summary, max_chars=40)
-            if wrapped:
-                draw.text((8, y0 + 3), wrapped[0], font=font, fill=0)
+            for idx, line in enumerate(footer[:2]):
+                draw.text((8, y0 + 2 + idx * 8), self._fit_text(line, 26), font=font, fill=0)
 
     def _draw_list_page(self, draw, font, frame: RenderFrame, width: int, height: int, icon_set: list[str]) -> None:
         y = 35
