@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/pigame
-Environment=PYTHONPATH=/home/pi/pigame/src
-ExecStart=/usr/bin/python3 -m pigame.desktop_server --host 0.0.0.0 --port 8080 --save /home/pi/pigame/data/save.json
+User=pizero
+WorkingDirectory=/home/pizero/pigame
+Environment=PYTHONPATH=/home/pizero/pigame/src
+ExecStart=/home/pizero/pigame/.venv/bin/python -m pigame.desktop_server --host 0.0.0.0 --port 8080 --save /home/pizero/pigame/data/save.json
 Restart=always
 RestartSec=10
 

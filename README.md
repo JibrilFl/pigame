@@ -68,6 +68,22 @@ pip install -e .
 
 For Raspberry Pi hardware rendering, `Pillow` is required and is now installed by the project automatically.
 
+## Pi User And Path
+
+This repository is currently standardized for a Raspberry Pi user named `pizero`
+with the project checked out at:
+
+```bash
+/home/pizero/pigame
+```
+
+The provided `systemd` units and helper scripts assume that exact user and path.
+If you use a different Linux username or install location, adjust the paths in:
+
+- `deploy/systemd/pigame.service`
+- `deploy/systemd/pigame-manager.service`
+- `run-pigame.sh`
+
 ## Run
 
 Initialize a save:
@@ -99,7 +115,8 @@ Open `http://127.0.0.1:8080`.
 To expose the manager to a PC on the same network, bind it on all interfaces:
 
 ```bash
-pigame-manager --host 0.0.0.0 --port 8080
+cd /home/pizero/pigame
+PYTHONPATH=/home/pizero/pigame/src /home/pizero/pigame/.venv/bin/pigame-manager --host 0.0.0.0 --port 8080 --save /home/pizero/pigame/data/save.json
 ```
 
 Then open `http://<PI_IP>:8080` from the PC.
@@ -152,6 +169,7 @@ pigame hardware-check
 Copy the repository onto the Pi, install it, then:
 
 ```bash
+cd /home/pizero/pigame
 sudo cp deploy/systemd/pigame.service /etc/systemd/system/pigame.service
 sudo cp deploy/systemd/pigame-manager.service /etc/systemd/system/pigame-manager.service
 sudo systemctl daemon-reload
@@ -159,7 +177,24 @@ sudo systemctl enable --now pigame.service
 sudo systemctl enable --now pigame-manager.service
 ```
 
-If needed, change the paths in `deploy/systemd/pigame.service` and `deploy/systemd/pigame-manager.service` from `/home/pi/pigame` to your real project path.
+Check service status:
+
+```bash
+sudo systemctl status pigame.service --no-pager
+sudo systemctl status pigame-manager.service --no-pager
+```
+
+Get the Pi address for PC access:
+
+```bash
+hostname -I
+```
+
+Then open from the PC:
+
+```text
+http://<PI_IP>:8080
+```
 
 ## Pi preparation notes
 
