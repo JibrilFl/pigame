@@ -155,6 +155,55 @@ class TextRenderer:
             recent = ["No notable events yet."]
         return [self._short_event(state.world.last_event), *[self._short_event(line) for line in recent]]
 
+    def _fit_text(self, text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        if max_chars <= 3:
+            return text[:max_chars]
+        return text[: max_chars - 3] + "..."
+
+    def _abbr_activity(self, activity: str) -> str:
+        table = {
+            "dungeon": "DNG",
+            "camp": "CMP",
+            "rest": "RST",
+            "hunt": "HNT",
+            "ritual": "RIT",
+            "salvage": "SLV",
+        }
+        return table.get(activity, activity[:3].upper())
+
+    def _short_region(self, region: str) -> str:
+        table = {
+            "Moss Tunnels": "MOSS",
+            "Ash Vault": "ASH",
+            "Static Hollows": "STAT",
+            "Moon Well": "MOON",
+            "Glass Catacomb": "GLAS",
+        }
+        return table.get(region, self._fit_text(region.upper(), 4))
+
+    def _short_item_name(self, name: str) -> str:
+        compact = (
+            name.replace("Rust ", "")
+            .replace("Saber", "Sab")
+            .replace("Bone ", "")
+            .replace("Sparks", "Spark")
+            .replace("Charm of ", "")
+            .replace("Lucky ", "Luck ")
+        )
+        return self._fit_text(compact, 10)
+
+    def _short_event(self, text: str) -> str:
+        compact = (
+            text.replace("stays in camp awaiting guidance", "camp wait")
+            .replace("cleared depth", "clr d")
+            .replace("and broke through", "beat")
+            .replace("Boss prep incomplete.", "prep")
+            .replace("Repeated losses.", "loss")
+        )
+        return self._fit_text(compact, 28)
+
 
 class ConsoleRenderer(TextRenderer):
     def render(self, frame: RenderFrame) -> str:
@@ -264,55 +313,6 @@ class WaveshareRenderer(TextRenderer):
         if current:
             lines.append(current)
         return lines
-
-    def _fit_text(self, text: str, max_chars: int) -> str:
-        if len(text) <= max_chars:
-            return text
-        if max_chars <= 3:
-            return text[:max_chars]
-        return text[: max_chars - 3] + "..."
-
-    def _abbr_activity(self, activity: str) -> str:
-        table = {
-            "dungeon": "DNG",
-            "camp": "CMP",
-            "rest": "RST",
-            "hunt": "HNT",
-            "ritual": "RIT",
-            "salvage": "SLV",
-        }
-        return table.get(activity, activity[:3].upper())
-
-    def _short_region(self, region: str) -> str:
-        table = {
-            "Moss Tunnels": "MOSS",
-            "Ash Vault": "ASH",
-            "Static Hollows": "STAT",
-            "Moon Well": "MOON",
-            "Glass Catacomb": "GLAS",
-        }
-        return table.get(region, self._fit_text(region.upper(), 4))
-
-    def _short_item_name(self, name: str) -> str:
-        compact = (
-            name.replace("Rust ", "")
-            .replace("Saber", "Sab")
-            .replace("Bone ", "")
-            .replace("Sparks", "Spark")
-            .replace("Charm of ", "")
-            .replace("Lucky ", "Luck ")
-        )
-        return self._fit_text(compact, 10)
-
-    def _short_event(self, text: str) -> str:
-        compact = (
-            text.replace("stays in camp awaiting guidance", "camp wait")
-            .replace("cleared depth", "clr d")
-            .replace("and broke through", "beat")
-            .replace("Boss prep incomplete.", "prep")
-            .replace("Repeated losses.", "loss")
-        )
-        return self._fit_text(compact, 28)
 
     def _draw_frame_ui(self, draw, font, frame: RenderFrame, width: int, height: int) -> None:
         self._draw_header(draw, font, frame, width)
