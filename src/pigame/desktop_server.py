@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 from .core import GameEngine
 from .device import TextRenderer
 from .models import EquipmentSlot, Item, SaveState, Specialization, zero_stats
-from .storage import DEFAULT_SAVE_PATH, auto_equip_inventory, load_save, save_state
+from .storage import DEFAULT_SAVE_PATH, auto_equip_inventory, infer_slot, load_save, save_state
 
 
 HTML = """<!doctype html>
@@ -68,6 +68,7 @@ HTML = """<!doctype html>
             <div class="metric"><strong>Power {power}</strong>Vitality {vitality}</div>
             <div class="metric"><strong>Agility {agility}</strong>Insight {insight}</div>
             <div class="metric"><strong>Luck {luck}</strong>Wins {wins} / Losses {losses}</div>
+            <div class="metric"><strong>Bosses {bosses_defeated}</strong>Major clears recorded</div>
             <div class="metric"><strong>Total P{total_power} V{total_vitality}</strong>Total A{total_agility} I{total_insight} L{total_luck}</div>
             <div class="metric"><strong>Hero Power {hero_power}</strong>Computed combat score base</div>
           </div>
@@ -99,10 +100,16 @@ HTML = """<!doctype html>
           <h2>World</h2>
           <p><strong>Region:</strong> {region}</p>
           <p><strong>Threat:</strong> {threat}</p>
+          <p><strong>Boss:</strong> {boss_status}</p>
           <p><strong>Danger:</strong> {danger}</p>
           <p><strong>Biome tier:</strong> {biome_tier}</p>
           <p><strong>Battery:</strong> {battery}</p>
           <p><strong>Last event:</strong> {last_event}</p>
+        </div>
+
+        <div class="panel">
+          <h2>Specialization Passives</h2>
+          {passives_html}
         </div>
 
         <div class="panel">
@@ -121,6 +128,7 @@ HTML = """<!doctype html>
               <input name="rarity" value="common" />
               <input name="power" value="0" />
               <input name="level" value="1" />
+              <input name="quality" value="0" />
               <button type="submit">Grant Item</button>
             </form>
 
@@ -166,6 +174,11 @@ HTML = """<!doctype html>
               <h3>Advance Time</h3>
               <input name="ticks" value="3" />
               <button type="submit">Run Ticks</button>
+            </form>
+
+            <form method="post" action="/forge">
+              <h3>Forge / Salvage</h3>
+              <button type="submit">Run Crafting Step</button>
             </form>
           </div>
         </div>
@@ -213,7 +226,9 @@ class ManagerHandler(BaseHTTPRequestHandler):
                 rarity=form.get("rarity", ["common"])[0],
                 power=int(form.get("power", ["0"])[0]),
                 level=int(form.get("level", ["1"])[0]),
+                quality=int(form.get("quality", ["0"])[0]),
                 quantity=1,
+                slot=infer_slot(form.get("item_type", ["material"])[0]),
                 stat_bonuses=zero_stats(),
             )
             state.inventory.append(item)
@@ -300,6 +315,13 @@ class ManagerHandler(BaseHTTPRequestHandler):
             self._redirect_home()
             return
 
+        if parsed.path == "/forge":
+            summary, _loot = self.engine.forge(state)
+            state.activity_log.append(f"Manager triggered forge: {summary}")
+            save_state(state, self.save_path)
+            self._redirect_home()
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
@@ -314,6 +336,11 @@ class ManagerHandler(BaseHTTPRequestHandler):
             f"{state.device.battery_percent}% / {state.device.battery_voltage:.2f}V"
             if state.device.battery_percent is not None and state.device.battery_voltage is not None
             else "unknown"
+        )
+        boss_status = (
+            f"{state.world.boss_name} (lvl {state.world.boss_level})"
+            if state.world.boss_active
+            else f"idle, next in {state.world.boss_countdown} clears"
         )
         return HTML.format(
             name=html.escape(c.name),
@@ -332,6 +359,7 @@ class ManagerHandler(BaseHTTPRequestHandler):
             agility=c.stats.agility,
             insight=c.stats.insight,
             luck=c.stats.luck,
+            bosses_defeated=c.bosses_defeated,
             total_power=total_stats.power,
             total_vitality=total_stats.vitality,
             total_agility=total_stats.agility,
@@ -342,10 +370,12 @@ class ManagerHandler(BaseHTTPRequestHandler):
             losses=c.losses,
             region=html.escape(state.world.current_region),
             threat=html.escape(state.world.current_threat),
+            boss_status=html.escape(boss_status),
             danger=state.world.danger_rating,
             biome_tier=state.world.biome_tier,
             battery=html.escape(battery),
             last_event=html.escape(state.world.last_event),
+            passives_html=self._render_passives(self.engine.passive_effects(state)),
             screen=html.escape(self.renderer.render_to_text(frame)),
             equipped_table=self._render_items_table(
                 state.inventory,
@@ -397,8 +427,10 @@ class ManagerHandler(BaseHTTPRequestHandler):
                 f"<td>{html.escape(item.item_type)}</td>"
                 f"<td>{html.escape(item.rarity)}</td>"
                 f"<td>{item.power}</td>"
+                f"<td>{item.quality}</td>"
                 f"<td>{html.escape(item.slot or '-')}</td>"
                 f"<td>{'yes' if item.equipped else 'no'}</td>"
+                f"<td>{'yes' if item.crafted else 'no'}</td>"
                 f"<td>{html.escape(affixes)}</td>"
                 f"<td>{action}</td>"
                 "</tr>"
@@ -407,7 +439,7 @@ class ManagerHandler(BaseHTTPRequestHandler):
             (("<form method='post' action='/autoequip'><button type='submit'>Auto Equip Best Items</button></form>") if allow_actions else "")
             +
             "<table><thead><tr>"
-            "<th>#</th><th>Name</th><th>Type</th><th>Rarity</th><th>Power</th><th>Slot</th><th>Eq</th><th>Affixes</th><th>Action</th>"
+            "<th>#</th><th>Name</th><th>Type</th><th>Rarity</th><th>Power</th><th>Q</th><th>Slot</th><th>Eq</th><th>Crafted</th><th>Affixes</th><th>Action</th>"
             "</tr></thead><tbody>"
             + "".join(rows)
             + "</tbody></table>"
@@ -428,6 +460,12 @@ class ManagerHandler(BaseHTTPRequestHandler):
                 f"<option value='{html.escape(specialization.value)}'{selected}>{html.escape(specialization.value)}</option>"
             )
         return "".join(options)
+
+    def _render_passives(self, passives: list[str]) -> str:
+        if not passives:
+            return "<p>No specialization passives.</p>"
+        entries = "".join(f"<li>{html.escape(line)}</li>" for line in passives)
+        return f"<ul>{entries}</ul>"
 
     def _send_html(self, body: str) -> None:
         encoded = body.encode("utf-8")

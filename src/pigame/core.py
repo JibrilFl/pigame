@@ -30,6 +30,7 @@ MATERIAL_NAMES = ["Slime Core", "Iron Husk", "Old Rune", "Glow Dust", "Night Res
 CONSUMABLE_NAMES = ["Bitter Tonic", "Smoke Fruit", "Repair Gel", "Amber Tea"]
 REGION_NAMES = ["Moss Tunnels", "Ash Vault", "Static Hollows", "Moon Well", "Glass Catacomb"]
 THREAT_NAMES = ["Wandering vermin", "Apex brood", "Mirror cult", "Rift scavengers", "Bone machine"]
+BOSS_TITLES = ["Brood Tyrant", "Vault Warden", "Static Monarch", "Moon Executor", "Glass Leviathan"]
 
 PREFIXES = [
     ("Savage", Stats(power=2, vitality=0, agility=0, insight=0, luck=0)),
@@ -53,6 +54,29 @@ SPECIALIZATION_BONUSES = {
     Specialization.HUNTER.value: Stats(power=3, vitality=0, agility=3, insight=0, luck=1),
     Specialization.ALCHEMIST.value: Stats(power=0, vitality=1, agility=0, insight=4, luck=1),
     Specialization.NECROTECH.value: Stats(power=2, vitality=1, agility=0, insight=3, luck=1),
+}
+
+SPECIALIZATION_PASSIVES = {
+    Specialization.WANDERER.value: [
+        "Adaptive growth: small all-stat baseline and flexible loot.",
+        "Field instincts: boss timers arrive slightly later.",
+    ],
+    Specialization.GUARDIAN.value: [
+        "Bulwark: extra combat value from vitality, armor quality, and boss fights.",
+        "Steady hands: dungeon losses cost less depth and mood.",
+    ],
+    Specialization.HUNTER.value: [
+        "Ambush: agility and luck spike combat variance upward.",
+        "Trophy eye: stronger chance for extra loot on clean clears and bosses.",
+    ],
+    Specialization.ALCHEMIST.value: [
+        "Reagents: consumables and salvage upgrades are more potent.",
+        "Field brewing: hunts and camping recover more supplies and gold.",
+    ],
+    Specialization.NECROTECH.value: [
+        "Soul graft: charm quality and insight amplify ritual and boss power.",
+        "Last echo: near-losses can convert into partial retreats instead of full failures.",
+    ],
 }
 
 
@@ -87,12 +111,22 @@ class GameEngine:
         else:
             summary, loot = self._dungeon_run(state)
 
+        self._add_items(state, loot)
         self._auto_equip(state, loot)
         self._consume_when_needed(state)
         leveled_up = self._apply_leveling(state)
         self._update_world(state)
+        self._stack_inventory(state)
         self._trim_logs(state)
         return TickResult(summary=summary, leveled_up=leveled_up, loot=loot)
+
+    def forge(self, state: SaveState) -> tuple[str, list[Item]]:
+        summary, loot = self._salvage_action(state)
+        self._add_items(state, loot)
+        self._auto_equip(state, loot)
+        self._stack_inventory(state)
+        self._trim_logs(state)
+        return summary, loot
 
     def total_stats(self, state: SaveState) -> Stats:
         return self._total_stats(state)
@@ -100,37 +134,47 @@ class GameEngine:
     def hero_power(self, state: SaveState) -> int:
         return self._hero_power(state)
 
+    def passive_effects(self, state: SaveState) -> list[str]:
+        return SPECIALIZATION_PASSIVES.get(state.character.specialization, [])
+
     def _choose_activity(self, state: SaveState) -> str:
         character = state.character
         roll = self.rng.random()
+        materials = self._material_count(state)
+
+        if state.world.boss_active:
+            return ActivityType.DUNGEON.value
         if character.mood < 25 or character.supplies <= 0:
             return ActivityType.REST.value if roll < 0.55 else ActivityType.CAMP.value
-        if character.specialization == Specialization.ALCHEMIST.value and character.supplies < 3 and roll < 0.30:
+        if character.specialization == Specialization.ALCHEMIST.value and character.supplies < 4 and roll < 0.32:
             return ActivityType.HUNT.value
-        if character.specialization == Specialization.NECROTECH.value and roll < 0.20:
+        if character.specialization == Specialization.NECROTECH.value and roll < 0.22:
             return ActivityType.RITUAL.value
-        if len([item for item in state.inventory if item.item_type == ItemType.MATERIAL.value]) >= 4 and roll < 0.15:
+        if (materials >= 4 or self._forgeable_spares(state)) and roll < 0.18:
             return ActivityType.SALVAGE.value
         if roll < 0.10:
             return ActivityType.REST.value
         if roll < 0.22:
             return ActivityType.CAMP.value
-        if roll < 0.33:
+        if roll < 0.34:
             return ActivityType.HUNT.value
         return ActivityType.DUNGEON.value
 
     def _rest(self, state: SaveState) -> str:
         character = state.character
+        bonus_supplies = 2 if character.specialization == Specialization.ALCHEMIST.value else 1
         character.mood = min(100, character.mood + 8)
-        character.supplies += 1
-        state.world.last_event = f"{character.name} rested, ate lightly, and regained focus."
+        character.supplies += bonus_supplies
+        state.world.last_event = f"{character.name} rested, patched gear, and regained focus."
         state.activity_log.append(state.world.last_event)
         return state.world.last_event
 
     def _camp_action(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
-        gold_gain = 2 + character.level + (1 if character.specialization == Specialization.ALCHEMIST.value else 0)
-        character.supplies += 1
+        gold_gain = 2 + character.level + (2 if character.specialization == Specialization.ALCHEMIST.value else 0)
+        if character.specialization == Specialization.WANDERER.value:
+            gold_gain += 1
+        character.supplies += 1 + (1 if character.specialization == Specialization.ALCHEMIST.value else 0)
         character.gold += gold_gain
         character.mood = min(100, character.mood + 3)
         self._maybe_unlock_specialization(state)
@@ -142,10 +186,14 @@ class GameEngine:
     def _hunt_action(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
         gains = 2 + self.rng.randint(0, 2) + character.level // 4
+        if character.specialization == Specialization.ALCHEMIST.value:
+            gains += 1
         character.supplies += gains
         character.experience += 4 + character.level
         character.mood = min(100, character.mood + 1)
-        loot = [self._make_item("Field Ration", ItemType.CONSUMABLE.value, "common", 0, character.level)]
+        loot = [self._make_item("Field Ration", ItemType.CONSUMABLE.value, "common", 0, character.level, quantity=1)]
+        if self.rng.random() < 0.35:
+            loot.append(self._make_item("Glow Dust", ItemType.MATERIAL.value, "common", 0, character.level, quantity=1))
         summary = f"{character.name} hunted through {state.world.current_region} and secured {gains} supplies."
         state.world.last_event = summary
         state.activity_log.append(summary)
@@ -153,50 +201,89 @@ class GameEngine:
 
     def _ritual_action(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
-        bonus = 5 + character.level
+        bonus = 5 + character.level + (3 if character.specialization == Specialization.NECROTECH.value else 0)
         character.experience += bonus
         character.mood = max(5, character.mood - 1)
-        character.stats.insight += 1 if self.rng.random() < 0.25 else 0
+        if self.rng.random() < 0.25:
+            character.stats.insight += 1
         summary = f"{character.name} performed a field ritual and extracted {bonus} arcane experience."
         state.world.last_event = summary
         state.activity_log.append(summary)
         loot: list[Item] = []
-        if self.rng.random() < 0.45:
-            loot.append(self._generate_loot(character.level, character.level + 1, forced_type=ItemType.CHARM.value)[0])
+        chance = 0.45 + (0.12 if character.specialization == Specialization.NECROTECH.value else 0.0)
+        if self.rng.random() < chance:
+            loot.extend(self._generate_loot(character.level, character.level + 1, forced_type=ItemType.CHARM.value))
         return summary, loot
 
     def _salvage_action(self, state: SaveState) -> tuple[str, list[Item]]:
-        materials = [item for item in state.inventory if item.item_type == ItemType.MATERIAL.value and item.quantity > 0]
-        summary = f"{state.character.name} found nothing worth reforging."
+        character = state.character
+        spare = self._weakest_spare_item(state)
+        materials = self._material_count(state)
         loot: list[Item] = []
-        if materials:
-            spent = materials[0]
-            spent.quantity -= 1
-            state.character.gold += 3 + state.character.level
-            state.character.experience += 6
-            loot = self._generate_loot(state.character.level, state.character.level + 2, forced_type=self.rng.choice([
-                ItemType.WEAPON.value,
-                ItemType.ARMOR.value,
-                ItemType.CHARM.value,
-            ]))
-            summary = f"{state.character.name} reforged {spent.name} into fresh equipment."
+
+        if spare is not None:
+            yield_count = 1 + self._rarity_bonus(spare.rarity) // 2 + spare.quality
+            spare.quantity -= 1
+            scrap = self._make_item("Forge Scrap", ItemType.MATERIAL.value, "uncommon", 0, max(1, spare.level), quantity=max(1, yield_count))
+            loot.append(scrap)
+            summary = f"{character.name} dismantled {spare.name} into {scrap.quantity} Forge Scrap."
+        elif materials >= 4 and character.gold >= self._upgrade_cost(state):
+            spent_gold = self._upgrade_cost(state)
+            target = self._upgrade_target(state)
+            if target is None:
+                summary = f"{character.name} surveyed the pack but found nothing worth refining."
+            else:
+                self._spend_materials(state, 4)
+                character.gold -= spent_gold
+                self._upgrade_item(target, state)
+                summary = f"{character.name} reforged {target.name} to quality +{target.quality}."
+        elif materials >= 3:
+            self._spend_materials(state, 3)
+            crafted_type = self._preferred_craft_type(state)
+            loot = self._generate_loot(character.level, character.level + 2, forced_type=crafted_type)
+            for item in loot:
+                item.quality += 1
+                item.crafted = True
+                if "crafted" not in item.tags:
+                    item.tags.append("crafted")
+            summary = f"{character.name} assembled fresh {crafted_type} gear from salvaged parts."
+        else:
+            summary = f"{character.name} found nothing worth reforging."
+
         state.inventory = [item for item in state.inventory if item.quantity > 0]
+        state.character.experience += 4 + (2 if loot else 0)
+        if character.specialization == Specialization.ALCHEMIST.value and loot:
+            character.mood = min(100, character.mood + 2)
         state.world.last_event = summary
         state.activity_log.append(summary)
         return summary, loot
 
     def _dungeon_run(self, state: SaveState) -> tuple[str, list[Item]]:
         character = state.character
+        boss_fight = state.world.boss_active
         enemy_level = max(1, character.level + character.dungeon_depth // 3)
+        if boss_fight:
+            enemy_level = max(enemy_level + 2, state.world.boss_level)
         enemy_power = enemy_level * 5 + state.world.danger_rating * 3
+        if boss_fight:
+            enemy_power += 10 + state.world.boss_phase * 4
+
         hero_power = self._hero_power(state)
+        passive_bonus, passive_notes = self._specialization_combat_bonus(state, boss_fight)
         variance = self.rng.randint(-6, 6)
-        score = hero_power + variance - enemy_power
+        if character.specialization == Specialization.HUNTER.value:
+            variance += self.rng.randint(0, max(2, self._total_stats(state).agility // 4))
+        score = hero_power + passive_bonus + variance - enemy_power
 
-        if character.supplies > 0:
-            character.supplies -= 1
+        supply_cost = 1
+        if character.specialization == Specialization.ALCHEMIST.value and self.rng.random() < 0.35:
+            supply_cost = 0
+        if character.supplies >= supply_cost:
+            character.supplies -= supply_cost
 
-        if score >= 0:
+        if boss_fight:
+            summary, loot = self._resolve_boss_fight(state, enemy_level, score, passive_notes)
+        elif score >= 0:
             character.wins += 1
             character.experience += 10 + enemy_level * 4
             character.gold += 4 + enemy_level * 2
@@ -205,7 +292,10 @@ class GameEngine:
             state.world.danger_rating = min(9999, state.world.danger_rating + 1)
             state.world.biome_tier = 1 + character.dungeon_depth // 10
             loot = self._generate_loot(character.level, enemy_level)
-            state.inventory.extend(loot)
+            if character.specialization == Specialization.HUNTER.value and score >= 8 and self.rng.random() < 0.4:
+                loot.extend(self._generate_loot(character.level, enemy_level, forced_type=ItemType.MATERIAL.value))
+                passive_notes.append("trophy eye")
+            self._advance_boss_counter(state)
             summary = (
                 f"{character.name} cleared depth {character.dungeon_depth - 1} "
                 f"and broke through a level {enemy_level} threat."
@@ -213,17 +303,82 @@ class GameEngine:
         else:
             character.losses += 1
             character.experience += 3 + enemy_level
-            character.mood = max(5, character.mood - 5)
-            character.dungeon_depth = max(1, character.dungeon_depth - 1)
+            retreat_depth = 1
+            mood_loss = 5
+            if character.specialization == Specialization.GUARDIAN.value:
+                retreat_depth = 0 if score >= -3 else 1
+                mood_loss = 2
+                passive_notes.append("bulwark hold")
+            elif character.specialization == Specialization.NECROTECH.value and score >= -4:
+                retreat_depth = 0
+                mood_loss = 3
+                passive_notes.append("last echo")
+            character.mood = max(5, character.mood - mood_loss)
+            character.dungeon_depth = max(1, character.dungeon_depth - retreat_depth)
             loot = []
             summary = (
                 f"{character.name} retreated from {state.world.current_region} after a hard fight "
                 f"with a level {enemy_level} threat."
             )
 
-        state.world.ambient_story = self._story_text(state, score)
-        state.world.last_event = summary
-        state.activity_log.append(summary)
+        note_suffix = f" Passive: {', '.join(passive_notes)}." if passive_notes else ""
+        state.world.ambient_story = self._story_text(state, score, boss_fight)
+        state.world.last_event = summary + note_suffix
+        state.activity_log.append(state.world.last_event)
+        return state.world.last_event, loot
+
+    def _resolve_boss_fight(
+        self,
+        state: SaveState,
+        enemy_level: int,
+        score: int,
+        passive_notes: list[str],
+    ) -> tuple[str, list[Item]]:
+        character = state.character
+        loot: list[Item] = []
+        boss_name = state.world.boss_name or self._boss_name(state)
+        if score >= 0:
+            character.wins += 1
+            character.bosses_defeated += 1
+            character.experience += 20 + enemy_level * 6
+            character.gold += 12 + enemy_level * 3
+            character.dungeon_depth += 2
+            character.mood = min(100, character.mood + 6)
+            state.world.danger_rating = min(9999, state.world.danger_rating + 2)
+            state.world.biome_tier = 1 + character.dungeon_depth // 10
+            loot.extend(self._generate_loot(character.level + 1, enemy_level + 2))
+            loot.extend(
+                self._generate_loot(
+                    character.level + 1,
+                    enemy_level + 2,
+                    forced_type=self._preferred_craft_type(state),
+                )
+            )
+            for item in loot:
+                if item.slot is not None:
+                    item.quality += 1
+            if character.specialization == Specialization.HUNTER.value:
+                loot.extend(self._generate_loot(character.level, enemy_level, forced_type=ItemType.MATERIAL.value))
+                passive_notes.append("trophy eye")
+            summary = f"{character.name} defeated boss {boss_name} at depth {character.dungeon_depth - 2}."
+            self._clear_boss(state, won=True)
+        else:
+            character.losses += 1
+            character.experience += 6 + enemy_level
+            character.mood = max(5, character.mood - 6)
+            if character.specialization == Specialization.GUARDIAN.value and score >= -5:
+                character.dungeon_depth = max(1, character.dungeon_depth - 1)
+                passive_notes.append("bulwark hold")
+                summary = f"{character.name} withstood boss {boss_name} and escaped with the route mapped."
+            elif character.specialization == Specialization.NECROTECH.value and score >= -5:
+                character.dungeon_depth = max(1, character.dungeon_depth - 1)
+                passive_notes.append("last echo")
+                summary = f"{character.name} tore free from boss {boss_name} through a soul graft retreat."
+            else:
+                character.dungeon_depth = max(1, character.dungeon_depth - 2)
+                summary = f"{character.name} was driven back by boss {boss_name}."
+            state.world.boss_level = max(1, state.world.boss_level - 1)
+            state.world.current_threat = boss_name
         return summary, loot
 
     def _hero_power(self, state: SaveState) -> int:
@@ -237,16 +392,8 @@ class GameEngine:
             + stats.luck
             + character.level * 4
         )
-        gear = sum(item.power for item in state.inventory if item.equipped)
-        specialization = SPECIALIZATION_BONUSES.get(character.specialization, zero_stats())
-        specialization_score = (
-            specialization.power
-            + specialization.vitality
-            + specialization.agility
-            + specialization.insight
-            + specialization.luck
-        )
-        return base + gear + specialization_score
+        gear = sum(item.power + item.quality * 2 for item in state.inventory if item.equipped)
+        return base + gear
 
     def _total_stats(self, state: SaveState) -> Stats:
         total = Stats(
@@ -270,7 +417,50 @@ class GameEngine:
             total.agility += item.stat_bonuses.agility
             total.insight += item.stat_bonuses.insight
             total.luck += item.stat_bonuses.luck
+            if item.quality > 0:
+                total.power += item.quality if item.slot == EquipmentSlot.MAIN_HAND.value else 0
+                total.vitality += item.quality if item.slot == EquipmentSlot.BODY.value else 0
+                total.insight += item.quality if item.slot == EquipmentSlot.CHARM.value else 0
         return total
+
+    def _specialization_combat_bonus(self, state: SaveState, boss_fight: bool) -> tuple[int, list[str]]:
+        total = self._total_stats(state)
+        character = state.character
+        notes: list[str] = []
+        bonus = 0
+
+        if character.specialization == Specialization.WANDERER.value:
+            bonus += 2 + state.character.level // 5
+            if not boss_fight:
+                bonus += 1
+        elif character.specialization == Specialization.GUARDIAN.value:
+            armor = self._equipped_in_slot(state, EquipmentSlot.BODY.value)
+            bonus += total.vitality // 2
+            bonus += (armor.quality * 3) if armor is not None else 0
+            if boss_fight:
+                bonus += 6
+            notes.append("bulwark")
+        elif character.specialization == Specialization.HUNTER.value:
+            bonus += total.agility // 2 + total.luck // 3
+            if boss_fight:
+                bonus += 3
+            notes.append("ambush")
+        elif character.specialization == Specialization.ALCHEMIST.value:
+            bonus += total.insight // 2
+            if any(item.item_type == ItemType.CONSUMABLE.value and item.quantity > 0 for item in state.inventory):
+                bonus += 4
+                notes.append("reagents")
+            if character.supplies <= 2:
+                bonus += 2
+        elif character.specialization == Specialization.NECROTECH.value:
+            charm = self._equipped_in_slot(state, EquipmentSlot.CHARM.value)
+            bonus += total.insight // 2
+            bonus += (charm.quality * 3) if charm is not None else 0
+            if boss_fight:
+                bonus += 5
+            notes.append("soul graft")
+
+        return bonus, notes
 
     def _generate_loot(self, hero_level: int, enemy_level: int, forced_type: str | None = None) -> list[Item]:
         count = 1 if self.rng.random() < 0.75 else 2
@@ -289,6 +479,7 @@ class GameEngine:
             level = max(1, (hero_level + enemy_level) // 2)
             power = max(0, level + bonus + self.rng.randint(0, 3))
             affixes, stat_bonuses, named = self._roll_affixes(item_type, rarity)
+            quality = self._roll_quality(rarity, enemy_level)
             slot = self._slot_for_item_type(item_type)
             if item_type == ItemType.WEAPON.value:
                 name = self.rng.choice(WEAPON_NAMES)
@@ -299,9 +490,11 @@ class GameEngine:
             elif item_type == ItemType.CONSUMABLE.value:
                 name = self.rng.choice(CONSUMABLE_NAMES)
                 power = 0
+                quality = 0
             else:
                 name = self.rng.choice(MATERIAL_NAMES)
                 power = 0
+                quality = 0
             final_name = f"{named} {name}".strip() if named else name
             loot.append(
                 self._make_item(
@@ -313,6 +506,7 @@ class GameEngine:
                     slot=slot,
                     affixes=affixes,
                     stat_bonuses=stat_bonuses,
+                    quality=quality,
                 )
             )
         return loot
@@ -327,6 +521,10 @@ class GameEngine:
         slot: str | None = None,
         affixes: list[str] | None = None,
         stat_bonuses: Stats | None = None,
+        quality: int = 0,
+        quantity: int = 1,
+        crafted: bool = False,
+        tags: list[str] | None = None,
     ) -> Item:
         return Item(
             name=name,
@@ -334,11 +532,14 @@ class GameEngine:
             rarity=rarity,
             power=power,
             level=level,
-            quantity=1,
+            quantity=quantity,
             slot=slot,
             equipped=False,
             affixes=affixes or [],
             stat_bonuses=stat_bonuses or zero_stats(),
+            quality=quality,
+            crafted=crafted,
+            tags=tags or [],
         )
 
     def _roll_affixes(self, item_type: str, rarity: str) -> tuple[list[str], Stats, str]:
@@ -366,6 +567,18 @@ class GameEngine:
             bonuses.luck += suffix_bonus.luck
             prefix_text = f"{prefix_text} {suffix}".strip()
         return affixes, bonuses, prefix_text
+
+    def _roll_quality(self, rarity: str, enemy_level: int) -> int:
+        base = {
+            "common": 0,
+            "uncommon": 0,
+            "rare": 1,
+            "epic": 2,
+            "mythic": 3,
+        }[rarity]
+        if enemy_level >= 10 and self.rng.random() < 0.35:
+            base += 1
+        return min(5, base)
 
     def _slot_for_item_type(self, item_type: str) -> str | None:
         if item_type == ItemType.WEAPON.value:
@@ -401,18 +614,30 @@ class GameEngine:
         if item is None:
             return -1
         bonuses = item.stat_bonuses
-        return item.power + bonuses.power + bonuses.vitality + bonuses.agility + bonuses.insight + bonuses.luck
+        return (
+            item.power
+            + bonuses.power
+            + bonuses.vitality
+            + bonuses.agility
+            + bonuses.insight
+            + bonuses.luck
+            + item.quality * 3
+        )
 
     def _consume_when_needed(self, state: SaveState) -> None:
         character = state.character
         if character.mood > 35 and character.supplies > 0:
             return
-        consumable = next((item for item in state.inventory if item.item_type == ItemType.CONSUMABLE.value and item.quantity > 0), None)
+        consumable = next(
+            (item for item in state.inventory if item.item_type == ItemType.CONSUMABLE.value and item.quantity > 0),
+            None,
+        )
         if consumable is None:
             return
         consumable.quantity -= 1
-        character.mood = min(100, character.mood + 10)
-        character.supplies += 1
+        recover = 12 if character.specialization == Specialization.ALCHEMIST.value else 10
+        character.mood = min(100, character.mood + recover)
+        character.supplies += 1 + (1 if character.specialization == Specialization.ALCHEMIST.value else 0)
         state.activity_log.append(f"{character.name} used {consumable.name}.")
         state.inventory = [item for item in state.inventory if item.quantity > 0]
 
@@ -465,8 +690,12 @@ class GameEngine:
         elif character.stats.insight >= 9 and character.stats.luck >= 7:
             character.specialization = Specialization.NECROTECH.value
 
-    def _story_text(self, state: SaveState, score: int) -> str:
+    def _story_text(self, state: SaveState, score: int, boss_fight: bool) -> str:
         character = state.character
+        if boss_fight and score >= 0:
+            return f"{character.name} toppled the tyrant ruling {state.world.current_region}."
+        if boss_fight:
+            return f"{character.name} felt the whole dungeon tighten around the boss chamber."
         if score >= 8:
             return f"{character.name} moved like a legend through the ruins."
         if score >= 0:
@@ -478,8 +707,10 @@ class GameEngine:
         pressure = state.world.danger_rating - character.level
         if state.device.low_power_mode:
             return "Battery is low. Favor rest, camp actions, and minimal risk."
+        if state.world.boss_active:
+            return f"Boss active: {state.world.boss_name}. Forge gear or prepare for a forced dungeon push."
         if pressure >= 8:
-            return "Threat is outpacing growth. Focus on recovery and gear quality."
+            return "Threat is outpacing growth. Focus on recovery, forging, and gear quality."
         if character.supplies <= 1:
             return "Supplies are low. The creature should favor camp actions soon."
         if character.specialization == Specialization.WANDERER.value and character.level >= 5:
@@ -493,7 +724,10 @@ class GameEngine:
 
     def _update_world(self, state: SaveState) -> None:
         state.world.current_region = REGION_NAMES[(state.character.dungeon_depth // 4) % len(REGION_NAMES)]
-        state.world.current_threat = THREAT_NAMES[state.world.danger_rating % len(THREAT_NAMES)]
+        if state.world.boss_active:
+            state.world.current_threat = state.world.boss_name
+        else:
+            state.world.current_threat = THREAT_NAMES[state.world.danger_rating % len(THREAT_NAMES)]
 
     def _title_for_level(self, level: int) -> str:
         if level >= 40:
@@ -509,3 +743,138 @@ class GameEngine:
     def _trim_logs(self, state: SaveState) -> None:
         state.activity_log = state.activity_log[-20:]
         state.party.trade_log = state.party.trade_log[-20:]
+
+    def _advance_boss_counter(self, state: SaveState) -> None:
+        countdown_step = 2 if state.character.specialization == Specialization.WANDERER.value else 1
+        state.world.boss_countdown -= countdown_step
+        if state.world.boss_countdown <= 0:
+            self._spawn_boss(state)
+
+    def _spawn_boss(self, state: SaveState) -> None:
+        state.world.boss_active = True
+        state.world.boss_phase += 1
+        state.world.boss_level = max(
+            state.character.level + 2,
+            state.character.dungeon_depth // 2 + state.world.biome_tier,
+        )
+        state.world.boss_name = self._boss_name(state)
+        state.world.current_threat = state.world.boss_name
+        state.activity_log.append(f"Boss sighted: {state.world.boss_name}.")
+
+    def _clear_boss(self, state: SaveState, won: bool) -> None:
+        state.world.boss_active = False
+        state.world.boss_name = ""
+        state.world.boss_level = 0
+        state.world.boss_countdown = 4 + max(0, state.character.bosses_defeated // 2) + (0 if won else 1)
+
+    def _boss_name(self, state: SaveState) -> str:
+        region_index = (state.character.dungeon_depth // 4) % len(REGION_NAMES)
+        return f"{BOSS_TITLES[region_index]} of {state.world.current_region}"
+
+    def _stack_inventory(self, state: SaveState) -> None:
+        merged: list[Item] = []
+        stacks: dict[tuple[str, str, str, int], Item] = {}
+        for item in state.inventory:
+            if item.quantity <= 0:
+                continue
+            stackable = item.item_type in {ItemType.CONSUMABLE.value, ItemType.MATERIAL.value}
+            if not stackable:
+                merged.append(item)
+                continue
+            key = (item.name, item.item_type, item.rarity, item.level)
+            current = stacks.get(key)
+            if current is None:
+                stacks[key] = item
+                merged.append(item)
+                continue
+            current.quantity += item.quantity
+        state.inventory = merged
+
+    def _add_items(self, state: SaveState, items: list[Item]) -> None:
+        for item in items:
+            if item.item_type in {ItemType.CONSUMABLE.value, ItemType.MATERIAL.value}:
+                existing = next(
+                    (
+                        entry
+                        for entry in state.inventory
+                        if entry.name == item.name
+                        and entry.item_type == item.item_type
+                        and entry.rarity == item.rarity
+                        and entry.level == item.level
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    existing.quantity += item.quantity
+                    continue
+            state.inventory.append(item)
+
+    def _material_count(self, state: SaveState) -> int:
+        return sum(item.quantity for item in state.inventory if item.item_type == ItemType.MATERIAL.value)
+
+    def _spend_materials(self, state: SaveState, amount: int) -> None:
+        remaining = amount
+        for item in state.inventory:
+            if item.item_type != ItemType.MATERIAL.value or remaining <= 0:
+                continue
+            spent = min(item.quantity, remaining)
+            item.quantity -= spent
+            remaining -= spent
+        state.inventory = [item for item in state.inventory if item.quantity > 0]
+
+    def _forgeable_spares(self, state: SaveState) -> int:
+        return len([item for item in state.inventory if item.slot is not None and not item.equipped])
+
+    def _weakest_spare_item(self, state: SaveState) -> Item | None:
+        spares = [item for item in state.inventory if item.slot is not None and not item.equipped and item.quantity > 0]
+        if not spares:
+            return None
+        return min(spares, key=self._gear_score)
+
+    def _upgrade_target(self, state: SaveState) -> Item | None:
+        equipped = [item for item in state.inventory if item.slot is not None and item.equipped]
+        if not equipped:
+            return None
+        return min(equipped, key=lambda item: (item.quality, self._gear_score(item)))
+
+    def _upgrade_cost(self, state: SaveState) -> int:
+        target = self._upgrade_target(state)
+        if target is None:
+            return 0
+        return 6 + target.level + target.quality * 3
+
+    def _upgrade_item(self, item: Item, state: SaveState) -> None:
+        item.quality = min(5, item.quality + 1)
+        item.power += 1 + max(1, state.character.level // 5)
+        item.crafted = True
+        if "crafted" not in item.tags:
+            item.tags.append("crafted")
+        if item.slot == EquipmentSlot.MAIN_HAND.value:
+            item.stat_bonuses.power += 1
+        elif item.slot == EquipmentSlot.BODY.value:
+            item.stat_bonuses.vitality += 1
+        elif item.slot == EquipmentSlot.CHARM.value:
+            item.stat_bonuses.insight += 1
+        if state.character.specialization == Specialization.ALCHEMIST.value:
+            item.stat_bonuses.luck += 1
+        elif state.character.specialization == Specialization.HUNTER.value:
+            item.stat_bonuses.agility += 1
+
+    def _preferred_craft_type(self, state: SaveState) -> str:
+        equipped_slots = {item.slot for item in state.inventory if item.equipped and item.slot is not None}
+        for desired in [EquipmentSlot.MAIN_HAND.value, EquipmentSlot.BODY.value, EquipmentSlot.CHARM.value]:
+            if desired not in equipped_slots:
+                return {
+                    EquipmentSlot.MAIN_HAND.value: ItemType.WEAPON.value,
+                    EquipmentSlot.BODY.value: ItemType.ARMOR.value,
+                    EquipmentSlot.CHARM.value: ItemType.CHARM.value,
+                }[desired]
+        spec = state.character.specialization
+        if spec == Specialization.GUARDIAN.value:
+            return ItemType.ARMOR.value
+        if spec == Specialization.HUNTER.value:
+            return ItemType.WEAPON.value
+        return ItemType.CHARM.value
+
+    def _rarity_bonus(self, rarity: str) -> int:
+        return next((bonus for name, bonus in RARITY_TABLE if name == rarity), 0)

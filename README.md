@@ -25,7 +25,9 @@ Ubuntu can be supported later, but first implementation should target Raspberry 
 - game state and save file format
 - autonomous tick-based progression
 - dungeons, scaling enemies, loot, consumables
-- role specialization unlocks
+- role specialization unlocks with passive combat identities
+- boss encounters tied to dungeon progression
+- deeper equipment progression with item quality, salvage, and forging
 - placeholder "mini AI" flavor summaries
 - text renderer abstraction for the future e-ink screen
 - autonomous runtime loop for Raspberry Pi
@@ -46,6 +48,12 @@ Your board may expose either:
 - `0x36` with `MAX17040`
 
 The project now supports both, and your reported scan indicates `0x62`.
+
+The desktop manager also exposes:
+
+- manual specialization changes and stat spending
+- direct equip controls and auto-equip
+- one-click forge/salvage actions for testing item progression
 
 ## Install
 

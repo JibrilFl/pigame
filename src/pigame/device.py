@@ -62,6 +62,11 @@ class TextRenderer:
                     f"Act {c.current_activity}  Supplies {c.supplies}  Gear {equipped}",
                     f"Depth {c.dungeon_depth}  Wins {c.wins}  Losses {c.losses}  Mood {c.mood}",
                     f"{state.world.current_region}  danger {state.world.danger_rating}  tier {state.world.biome_tier}",
+                    (
+                        f"Boss {state.world.boss_name} lvl {state.world.boss_level}"
+                        if state.world.boss_active
+                        else f"Boss in {state.world.boss_countdown} clears"
+                    ),
                     f"XP {c.experience}  Gold {c.gold}  Pts {c.unspent_stat_points}",
                     battery_line,
                     f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
@@ -106,10 +111,14 @@ class TextRenderer:
                 lines.append(f"{label}: empty")
                 continue
             affix = f" [{' / '.join(item.affixes)}]" if item.affixes else ""
-            lines.append(f"{label}: {item.name} +{item.power}{affix}")
+            crafted = " crafted" if item.crafted else ""
+            lines.append(f"{label}: {item.name} +{item.power} q{item.quality}{crafted}{affix}")
         consumables = sum(item.quantity for item in state.inventory if item.item_type == "consumable")
         materials = sum(item.quantity for item in state.inventory if item.item_type == "material")
         lines.append(f"Consumables {consumables}  Materials {materials}")
+        passives = engine.passive_effects(state)
+        if passives:
+            lines.extend([f"Passive: {text}" for text in passives[:2]])
         return lines
 
     def _build_log_lines(self, state: SaveState) -> list[str]:

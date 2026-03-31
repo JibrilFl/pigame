@@ -58,11 +58,23 @@ def migrate_save(state: SaveState) -> bool:
     if state.character.unspent_stat_points < 0:
         state.character.unspent_stat_points = 0
         changed = True
+    if state.character.bosses_defeated < 0:
+        state.character.bosses_defeated = 0
+        changed = True
     if not state.world.current_region:
         state.world.current_region = infer_region(state.character.dungeon_depth)
         changed = True
     if not state.world.current_threat:
         state.world.current_threat = "Wandering vermin"
+        changed = True
+    if state.world.boss_countdown <= 0:
+        state.world.boss_countdown = 3
+        changed = True
+    if state.world.boss_level < 0:
+        state.world.boss_level = 0
+        changed = True
+    if state.world.boss_phase < 0:
+        state.world.boss_phase = 0
         changed = True
 
     for item in state.inventory:
@@ -76,6 +88,12 @@ def migrate_save(state: SaveState) -> bool:
             changed = True
         if item.stat_bonuses is None:
             item.stat_bonuses = zero_stats()
+            changed = True
+        if item.quality < 0:
+            item.quality = 0
+            changed = True
+        if item.tags is None:
+            item.tags = []
             changed = True
 
     if auto_equip_inventory(state):
@@ -126,6 +144,7 @@ def auto_equip_inventory(state: SaveState) -> bool:
             + item.stat_bonuses.agility
             + item.stat_bonuses.insight
             + item.stat_bonuses.luck
+            + item.quality * 3
         )
         current = best_by_slot.get(item.slot)
         if current is None or score > current[0]:

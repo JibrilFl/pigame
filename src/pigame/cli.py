@@ -63,7 +63,8 @@ def main(argv: list[str] | None = None) -> int:
             result = engine.tick(state)
             print(result.summary)
             for item in result.loot:
-                print(f"  loot: {item.rarity} {item.name} ({item.item_type})")
+                crafted = " crafted" if item.crafted else ""
+                print(f"  loot: {item.rarity} {item.name} ({item.item_type}) q{item.quality}{crafted}")
             if result.leveled_up:
                 print(f"  level up -> {state.character.level}")
         save_state(state, args.save)
@@ -109,3 +110,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error("unknown command")
     return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

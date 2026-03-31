@@ -61,6 +61,9 @@ class Item:
     equipped: bool = False
     affixes: list[str] = field(default_factory=list)
     stat_bonuses: Stats = field(default_factory=zero_stats)
+    quality: int = 0
+    crafted: bool = False
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +83,7 @@ class Character:
     current_activity: str = ActivityType.DUNGEON.value
     title: str = "Hatchling Delver"
     unspent_stat_points: int = 0
+    bosses_defeated: int = 0
 
 
 @dataclass
@@ -90,6 +94,11 @@ class WorldState:
     last_event: str = "The creature wakes."
     current_region: str = "Moss Tunnels"
     current_threat: str = "Wandering vermin"
+    boss_active: bool = False
+    boss_name: str = ""
+    boss_level: int = 0
+    boss_countdown: int = 3
+    boss_phase: int = 0
 
 
 @dataclass
@@ -142,6 +151,7 @@ class SaveState:
             current_activity=character_data.get("current_activity", ActivityType.DUNGEON.value),
             title=character_data.get("title", "Hatchling Delver"),
             unspent_stat_points=character_data.get("unspent_stat_points", 0),
+            bosses_defeated=character_data.get("bosses_defeated", 0),
         )
 
         inventory = []
