@@ -96,6 +96,14 @@ pigame-manager --host 127.0.0.1 --port 8080
 
 Open `http://127.0.0.1:8080`.
 
+To expose the manager to a PC on the same network, bind it on all interfaces:
+
+```bash
+pigame-manager --host 0.0.0.0 --port 8080
+```
+
+Then open `http://<PI_IP>:8080` from the PC.
+
 Run the autonomous device loop:
 
 ```powershell
@@ -145,11 +153,13 @@ Copy the repository onto the Pi, install it, then:
 
 ```bash
 sudo cp deploy/systemd/pigame.service /etc/systemd/system/pigame.service
+sudo cp deploy/systemd/pigame-manager.service /etc/systemd/system/pigame-manager.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now pigame.service
+sudo systemctl enable --now pigame-manager.service
 ```
 
-If needed, change the paths in `deploy/systemd/pigame.service` from `/home/pi/pigame` to your real project path.
+If needed, change the paths in `deploy/systemd/pigame.service` and `deploy/systemd/pigame-manager.service` from `/home/pi/pigame` to your real project path.
 
 ## Pi preparation notes
 
