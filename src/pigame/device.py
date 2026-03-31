@@ -63,6 +63,12 @@ class TextRenderer:
             if voltage is not None
             else f"Battery {battery_text} {charge_flag}  Volt --.--V"
         )
+        wait_text = "HOLD" if c.awaiting_player else "RUN"
+        boss_text = (
+            f"Boss {state.world.boss_level}"
+            if state.world.boss_active
+            else f"Boss in {state.world.boss_countdown}"
+        )
         return [
             RenderFrame(
                 title=f"{c.name}  Lv{c.level}",
@@ -73,20 +79,14 @@ class TextRenderer:
                 low_power=state.device.low_power_mode,
                 lines=[
                     f"{c.title} / {c.specialization}",
-                    f"P{c.stats.power} V{c.stats.vitality}  A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
-                    f"Act {c.current_activity}  Sup {c.supplies}  Gear {equipped}",
-                    f"Depth {c.dungeon_depth}  W {c.wins}  L {c.losses}  Mood {c.mood}",
-                    f"Gold {c.gold}  StatPts {c.unspent_stat_points}  PerkPts {c.perk_points}",
-                    f"{state.world.current_region} / danger {state.world.danger_rating} / tier {state.world.biome_tier}",
-                    (
-                        f"Boss {state.world.boss_name} lv{state.world.boss_level}"
-                        if state.world.boss_active
-                        else f"Boss in {state.world.boss_countdown} clears"
-                    ),
-                    f"Loss {c.loss_streak}  Wait {c.awaiting_player}  Perks {len(c.perks)}",
-                    battery_line,
-                    f"LowPower {state.device.low_power_mode}  Shutdown {state.device.shutdown_requested}",
-                    f"AI: {engine.ai_brief(state)}",
+                    f"Act {c.current_activity} / Sup {c.supplies} / Gear {equipped}",
+                    f"P{c.stats.power} V{c.stats.vitality} / A{c.stats.agility} I{c.stats.insight} L{c.stats.luck}",
+                    f"Depth {c.dungeon_depth} / W {c.wins} L {c.losses} / Mood {c.mood}",
+                    f"Gold {c.gold} / Stat {c.unspent_stat_points} / Perk {c.perk_points}",
+                    f"{state.world.current_region}",
+                    f"Danger {state.world.danger_rating} / Tier {state.world.biome_tier} / {boss_text}",
+                    f"State {wait_text} / Loss {c.loss_streak} / Perks {len(c.perks)}",
+                    f"AI {engine.ai_brief(state)}",
                 ],
             ),
             RenderFrame(
@@ -124,7 +124,7 @@ class TextRenderer:
             "charm": "Charm",
         }
         lines = [
-            f"Power from gear {sum(item.power for item in state.inventory if item.equipped)}",
+            f"Gear power {sum(item.power for item in state.inventory if item.equipped)}",
             f"Inventory {len(state.inventory)} items",
         ]
         for slot_key, label in slots.items():
@@ -135,21 +135,20 @@ class TextRenderer:
             if item is None:
                 lines.append(f"{label}: empty")
                 continue
-            affix = f" [{' / '.join(item.affixes)}]" if item.affixes else ""
-            crafted = " crafted" if item.crafted else ""
-            lines.append(f"{label}: {item.name} +{item.power} q{item.quality}{crafted}{affix}")
+            crafted = " *" if item.crafted else ""
+            lines.append(f"{label}: {item.name} +{item.power} q{item.quality}{crafted}")
         consumables = sum(item.quantity for item in state.inventory if item.item_type == "consumable")
         materials = sum(item.quantity for item in state.inventory if item.item_type == "material")
         blueprints = sum(item.quantity for item in state.inventory if item.item_type == "recipe")
-        lines.append(f"Consumables {consumables}  Materials {materials}")
-        lines.append(f"Blueprints {blueprints}  Known recipes {len(state.character.known_recipes)}")
+        lines.append(f"Use {consumables} / Mat {materials} / BP {blueprints}")
+        lines.append(f"Known recipes {len(state.character.known_recipes)}")
         passives = engine.passive_effects(state)
         if passives:
-            lines.extend([f"Passive: {text}" for text in passives[:2]])
+            lines.append(f"Passive: {passives[0]}")
         return lines
 
     def _build_log_lines(self, state: SaveState) -> list[str]:
-        recent = list(reversed(state.activity_log[-6:]))
+        recent = list(reversed(state.activity_log[-3:]))
         if not recent:
             recent = ["No notable events yet."]
         return [f"Last event: {state.world.last_event}", *recent]
@@ -264,6 +263,13 @@ class WaveshareRenderer(TextRenderer):
             lines.append(current)
         return lines
 
+    def _fit_text(self, text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        if max_chars <= 3:
+            return text[:max_chars]
+        return text[: max_chars - 3] + "..."
+
     def _draw_frame_ui(self, draw, font, frame: RenderFrame, width: int, height: int) -> None:
         self._draw_header(draw, font, frame, width)
         if frame.page == "status":
@@ -314,33 +320,32 @@ class WaveshareRenderer(TextRenderer):
                 draw.ellipse((x0 + 1, y + 1, x0 + 3, y + 3), outline=255, fill=255)
 
     def _draw_status_page(self, draw, font, frame: RenderFrame, width: int, height: int) -> None:
-        cards = frame.lines[:8]
+        cards = frame.lines[:6]
         body_top = 34
         card_w = (width - 18) // 2
-        card_h = 18
-        icons = ["star", "stats", "act", "skull", "coin", "map", "crown", "alert"]
+        card_h = 16
+        icons = ["star", "act", "stats", "skull", "coin", "map", "crown", "alert"]
         for index, line in enumerate(cards):
             col = index % 2
             row = index // 2
             x0 = 5 + col * (card_w + 8)
             y0 = body_top + row * (card_h + 4)
-            if y0 + card_h > height - 22:
+            if y0 + card_h > height - 24:
                 break
             self._draw_card(draw, font, x0, y0, card_w, card_h, line, icons[index % len(icons)])
-        footer = frame.lines[8:10]
+        footer = frame.lines[6:8]
         if footer:
-            y0 = height - 20
+            y0 = height - 19
             draw.rectangle((5, y0, width - 6, height - 5), outline=0, fill=255)
-            summary = " / ".join(footer)
-            wrapped = self._wrap_text(summary, max_chars=38)
+            summary = self._fit_text(" / ".join(footer), 40)
+            wrapped = self._wrap_text(summary, max_chars=40)
             if wrapped:
                 draw.text((8, y0 + 3), wrapped[0], font=font, fill=0)
 
     def _draw_list_page(self, draw, font, frame: RenderFrame, width: int, height: int, icon_set: list[str]) -> None:
         y = 35
-        row_h = 13
         for index, raw_line in enumerate(frame.lines):
-            wrapped = self._wrap_text(raw_line, max_chars=34)
+            wrapped = self._wrap_text(self._fit_text(raw_line, 34), max_chars=26)
             if not wrapped:
                 continue
             box_h = 11 + 10 * min(2, len(wrapped))
@@ -358,7 +363,7 @@ class WaveshareRenderer(TextRenderer):
         draw.rectangle((x, y, x + w, y + h), outline=0, fill=255)
         draw.rectangle((x + 1, y + 1, x + 14, y + h - 1), outline=0, fill=0)
         self._draw_icon(draw, icon_name, x + 3, y + 5, invert=True)
-        wrapped = self._wrap_text(text, max_chars=15)
+        wrapped = self._wrap_text(self._fit_text(text, 22), max_chars=13)
         if wrapped:
             draw.text((x + 18, y + 3), wrapped[0], font=font, fill=0)
         if len(wrapped) > 1:
