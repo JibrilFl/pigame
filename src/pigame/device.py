@@ -379,10 +379,10 @@ class WaveshareRenderer(TextRenderer):
             self._draw_card(draw, font, x0, y0, card_w, card_h, line, icons[index % len(icons)])
         footer = frame.lines[6:8]
         if footer:
-            y0 = height - 23
+            y0 = height - 19
             draw.rectangle((5, y0, width - 6, height - 5), outline=0, fill=255)
-            for idx, line in enumerate(footer[:2]):
-                draw.text((8, y0 + 2 + idx * 8), self._fit_text(line, 26), font=font, fill=0)
+            footer_text = self._fit_text(" / ".join(footer[:2]), 28)
+            draw.text((8, y0 + 3), footer_text, font=font, fill=0)
 
     def _draw_list_page(self, draw, font, frame: RenderFrame, width: int, height: int, icon_set: list[str]) -> None:
         y = 35
@@ -405,11 +405,7 @@ class WaveshareRenderer(TextRenderer):
         draw.rectangle((x, y, x + w, y + h), outline=0, fill=255)
         draw.rectangle((x + 1, y + 1, x + 14, y + h - 1), outline=0, fill=0)
         self._draw_icon(draw, icon_name, x + 3, y + 5, invert=True)
-        wrapped = self._wrap_text(self._fit_text(text, 22), max_chars=13)
-        if wrapped:
-            draw.text((x + 18, y + 3), wrapped[0], font=font, fill=0)
-        if len(wrapped) > 1:
-            draw.text((x + 18, y + 10), wrapped[1], font=font, fill=0)
+        draw.text((x + 18, y + 5), self._fit_text(text, 12), font=font, fill=0)
 
     def _draw_icon(self, draw, icon_name: str, x: int, y: int, invert: bool = False) -> None:
         ink = 255 if invert else 0
